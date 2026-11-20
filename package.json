@@ -1,0 +1,15 @@
+{
+  "name": "powerbi-embedded-saas-starter",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["src/server", "src/web"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "npm run build --workspace @pbi/server && npm run build --workspace @pbi/web",
+    "dev": "npm run dev --workspace @pbi/server",
+    "start": "npm run start --workspace @pbi/server",
+    "migrate": "npm run migrate --workspace @pbi/server",
+    "test": "npm run test --workspace @pbi/server",
+    "check": "npm run check --workspaces --if-present"
+  }
+}
