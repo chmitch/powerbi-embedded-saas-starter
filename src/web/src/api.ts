@@ -54,13 +54,14 @@ export interface EmbedConfiguration {
   expiration: string; mode: "view" | "edit" | "copy"; create: boolean;
   targetWorkspaceId?: string;
   autoResumeCapacities?: boolean; capacityResumed?: boolean;
+  renderReceipt?: string; renderTrackingUnavailable?: boolean;
 }
 export const permissions = { ViewReport: 1, EditReport: 2, CreateReport: 4, CopyReport: 8,
   UseSemanticModelForAuthoring: 16, ManageContent: 32, ManageNavigation: 64 };
 let csrf = "";
 export function setCsrf(value: string) { csrf = value; }
-export async function api<T>(url: string, method = "GET", body?: unknown): Promise<T> {
-  const response = await fetch(url, { method, credentials: "same-origin", headers: {
+export async function api<T>(url: string, method = "GET", body?: unknown, options: { keepalive?: boolean } = {}): Promise<T> {
+  const response = await fetch(url, { method, credentials: "same-origin", keepalive: options.keepalive, headers: {
     "Content-Type": "application/json", "X-CSRF-Token": csrf,
   }, body: body === undefined ? undefined : JSON.stringify(body) });
   const data = await response.json() as { message?: string; code?: string };

@@ -19,6 +19,9 @@ The application supports:
 - App Owns Data report viewing, editing, Save As, and creation from approved models.
   Each tenant has its own workspace and embedding service principal; ordinary
   users belong to exactly one application tenant.
+- Initial report render history: authenticated user/tenant/report, request
+  timestamp and request-to-first-render duration, including capacity startup.
+  See [render history and future admin insights](ARCHITECTURE.md#report-render-history-and-planned-administrator-insights).
 
 [Setup](#setup) | [Azure deployment](#deploy-to-azure) |
 [Tenant onboarding](#first-sign-in-and-tenant-onboarding) |
@@ -33,7 +36,7 @@ One Linux App Service B1 instance serves both frontend and backend. Persistence
 is a transactional **SQL Database in Fabric**, on a dedicated management F2
 capacity. It stores tenant/workspace mappings, users and membership,
 administrator roles, permission grants, content metadata, navigation, audit
-records, encrypted sessions and provisioning state, not the reports' analytical
+records, initial-render history, encrypted sessions and provisioning state, not the reports' analytical
 data. Production credentials live in Key Vault behind an enforced Network
 Security Perimeter (NSP). Tenant report workspaces use separate customer capacity;
 multiple tenant workspaces may share that compute without sharing permissions.
@@ -472,6 +475,13 @@ to ignored files. Inspect the staged diff and run an approved secret scanner
 before publishing. No repository license has been selected.
 
 ## Known limitations
+
+Render history requires schema migration 4. Apply migrations before publishing
+this update to an existing database; application-only ZIP deployment does not
+migrate SQL. Tracking is client-reported and best-effort, not a billing-grade
+view counter. Platform-admin and tenant-admin embedded analytics reports remain
+planned, as does automatic tenant-report packaging during onboarding.
+See the [administrator reporting TODOs](ARCHITECTURE.md#administrator-reporting-todos).
 
 General-purpose portal PBIX/model upload (apart from the fixed bundled
 sample), effective-identity RLS, paginated/composite models,

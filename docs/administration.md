@@ -276,6 +276,29 @@ outcomes require a refresh before a deliberate retry, not automatic replay.
 
 ## Tenant admin: run the tenant experience
 
+### Report usage history
+
+The backend records completed **initial renders** for each existing report
+open/reload, including viewing, editing and copy sessions, in the management SQL
+table `app.ReportRenders`. Each row identifies the tenant, application user and
+directory identity, registered report and Power BI report/workspace IDs, name
+snapshots, mode, UTC request timestamp and total elapsed milliseconds.
+Elapsed time includes token generation and capacity startup, ending at the first
+SDK `rendered` event. Token refreshes, subsequent page/filter renders and the
+unsaved new-report editor's `loaded` event are not additional report views.
+
+Client request/completion times are distinguishable from server request receipt
+and database ingestion times. These client-reported metrics are useful for
+diagnostics, not billing or proof that a human actually read the report.
+Failed delivery, abandoned loads or expired sessions can omit records; tracking
+warnings do not prevent consuming the report. Retention/export policy must be
+chosen before using identity history at production scale.
+
+Tenant-admin-only embedded insights/audit reports and onboarding-time packaging
+are planned, not available yet. This change supplies their future data source,
+not a dashboard or direct tenant access to shared SQL. Future models must enforce
+tenant-isolated data and admin-only report access.
+
 ### Add users
 
 Open **Tenant admin > Tenant users** and register an existing directory user by

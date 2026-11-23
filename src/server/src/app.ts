@@ -18,6 +18,7 @@ import { setupSchema, TenantProvisioner } from "./provisioning.js";
 import { capacityDemand, CapacityRecovery } from "./capacity-recovery.js";
 import { CapacityManagement } from "./capacity-management.js";
 import { CapacityPolicy } from "./capacity-policy.js";
+import { ReportRenders } from "./report-renders.js";
 
 const uuid = z.uuid();
 const name = z.string().trim().min(1).max(200);
@@ -41,6 +42,11 @@ export async function createApp(config: AppConfig) {
   const provisioner = new TenantProvisioner(repo, azure, fabric);
   const capacityManagement = new CapacityManagement(repo, azure, fabric);
   const app = express();
+  const embedReceivedAt = new WeakMap<Request, Date>();
+  app.use((req, _res, next) => {
+    if (req.method === "POST" && req.path.toLowerCase() === "/api/embed/report") embedReceivedAt.set(req, new Date());
+    next();
+  });
   app.disable("x-powered-by");
   if (isProduction) app.set("trust proxy", 1);
   app.use(helmet({ contentSecurityPolicy: { directives: {
@@ -68,6 +74,7 @@ export async function createApp(config: AppConfig) {
     } else capacityDemand.run(foreground, next);
   });
   const sessionKey = readyConfig ? await azure.secret(config.SessionSecretName) : randomBytes(32).toString("base64");
+  const reportRenders = new ReportRenders(repo, sessionKey);
   app.use(session({
     name: "pbi.sid", secret: sessionKey, resave: false, saveUninitialized: false,
     store: readyConfig ? new EncryptedSqlSessionStore(db, () => azure.secret(config.SessionSecretName)) : undefined,
@@ -160,10 +167,26 @@ export async function createApp(config: AppConfig) {
   }));
   app.post("/api/embed/report", wrap(async (req, res) => {
     const input = z.object({ contentId: uuid, mode: z.enum(["view", "edit", "copy"]).default("view"),
-      recoverCapacity: z.boolean().default(false) }).strict().parse(req.body);
+      recoverCapacity: z.boolean().default(false),
+      render: z.object({ requestedAt: z.string().datetime().max(40), receipt: z.string().max(6000).optional() }).strict().optional(),
+    }).strict().parse(req.body);
     const result = await fabric.embed(getUser(req), input.contentId, input.mode, input.recoverCapacity);
     await repo.audit(getUser(req), "EmbedToken", input.contentId, input.mode);
-    res.json(result);
+    if (!input.render) { res.json(result); return; }
+    try {
+      const renderReceipt = await reportRenders.issue(getUser(req), input.contentId, result.id, input.mode,
+        input.render.requestedAt, embedReceivedAt.get(req) ?? new Date(), input.render.receipt);
+      res.json({ ...result, renderReceipt });
+    } catch {
+      console.error(JSON.stringify({ code: "ReportRenderTrackingUnavailable" }));
+      res.json({ ...result, renderTrackingUnavailable: true });
+    }
+  }));
+  app.post("/api/telemetry/report-rendered", wrap(async (req, res) => {
+    const input = z.object({ receipt: z.string().min(1).max(6000), durationMs: z.number().int().min(0).max(86_400_000) })
+      .strict().parse(req.body);
+    const result = await reportRenders.record(getUser(req), input.receipt, input.durationMs);
+    res.status(result.duplicate ? 200 : 201).json(result);
   }));
   app.post("/api/embed/create", wrap(async (req, res) => {
     const { modelId, recoverCapacity } = z.object({ modelId: uuid, recoverCapacity: z.boolean().default(false) }).strict().parse(req.body);

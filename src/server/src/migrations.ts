@@ -88,5 +88,23 @@ export async function migrate(db: Database) {
         CREATE UNIQUE INDEX IX_Provisioning_ActiveTenant ON app.ProvisioningOperations(TenantId) WHERE Status='Running';
         INSERT app.SchemaVersions(Version) VALUES(3);
       END`);
+    await tx.query(`
+      IF NOT EXISTS(SELECT 1 FROM app.SchemaVersions WHERE Version=4)
+      BEGIN
+        CREATE TABLE app.ReportRenders (
+          Id uniqueidentifier NOT NULL PRIMARY KEY,
+          TenantId uniqueidentifier NOT NULL REFERENCES app.Tenants(Id),
+          UserId uniqueidentifier NOT NULL, DirectoryId uniqueidentifier NOT NULL, ObjectId uniqueidentifier NOT NULL,
+          UserDisplayName nvarchar(200) NOT NULL, ContentId uniqueidentifier NOT NULL,
+          ReportId uniqueidentifier NOT NULL, ReportName nvarchar(200) NOT NULL, WorkspaceId uniqueidentifier NOT NULL,
+          Mode nvarchar(10) NOT NULL CHECK(Mode IN ('view','edit','copy')),
+          RequestedAt datetime2 NOT NULL, ServerReceivedAt datetime2 NOT NULL, RenderedAt datetime2 NOT NULL,
+          DurationMs int NOT NULL CHECK(DurationMs BETWEEN 0 AND 86400000),
+          RecordedAt datetime2 NOT NULL DEFAULT SYSUTCDATETIME()
+        );
+        CREATE INDEX IX_ReportRenders_Tenant_Request ON app.ReportRenders(TenantId,ServerReceivedAt)
+          INCLUDE(UserId,ContentId,DurationMs,Mode);
+        INSERT app.SchemaVersions(Version) VALUES(4);
+      END`);
   });
 }

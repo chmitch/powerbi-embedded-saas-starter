@@ -2,6 +2,7 @@ import { it } from "node:test";
 import assert from "node:assert/strict";
 import * as models from "powerbi-models";
 import { bindReportLifecycle, embedErrorMessage, reportEmbedPermissions } from "../../web/src/embedding.js";
+import { reportRenderMeasurement } from "../../web/src/report-render.js";
 
 const id = "11111111-1111-4111-8111-111111111111";
 const base = { type: "report", id, embedUrl: "https://app.powerbi.com/reportEmbed",
@@ -92,4 +93,25 @@ it("detaches lifecycle handlers and ignores queued events after a session closes
     assert.equal(report.renders(), 0);
     assert.equal(report.handlers.size, 0);
   }
+});
+
+it("measures only the first existing-report render from the original request, including recovery, not load or later renders", () => {
+  let time = 100;
+  const measurement = reportRenderMeasurement(() => time, () => "2026-11-23T16:00:00.000Z");
+  const handlers = new Map<string, () => void>(), completed: unknown[] = [];
+  const events = { on: (name: string, handler: () => void) => { handlers.set(name, handler); },
+    off: (name: string) => { handlers.delete(name); } };
+  const attach = (creating = false) => bindReportLifecycle(events, { creating, onReady: () => {}, onRendering: () => {},
+    onRendered: () => { completed.push(measurement.complete("receipt")); } });
+  const stop = attach();
+  handlers.get("loaded")!(); assert.equal(completed.length, 0);
+  const stale = handlers.get("rendered")!; stop();
+  time = 180100;
+  const recoveryStop = attach();
+  stale(); handlers.get("loaded")!(); handlers.get("rendered")!(); handlers.get("rendered")!();
+  assert.deepEqual(completed, [{ receipt: "receipt", durationMs: 180000 }]);
+  assert.equal(measurement.complete("receipt"), undefined);
+  recoveryStop();
+  const editorStop = attach(true); handlers.get("loaded")!(); handlers.get("rendered")!();
+  assert.equal(completed.length, 1); editorStop();
 });

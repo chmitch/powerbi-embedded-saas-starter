@@ -3,6 +3,7 @@ import * as powerbi from "powerbi-client";
 import { api, permissions, type Catalog, type EmbedConfiguration, type ReportItem } from "./api";
 import { bindReportLifecycle, embedErrorMessage, reportEmbedPermissions } from "./embedding";
 import { Icon } from "./icons";
+import { reportRenderMeasurement } from "./report-render";
 
 type Selection = { contentId: string; mode: "view" | "edit" } | { modelId: string };
 type Run = (action: () => Promise<unknown>, message?: string) => Promise<void>;
@@ -193,6 +194,7 @@ function EmbeddedReport({ ref, selection, report, title, onView, onEdit, onClose
   const [notice, setNotice] = useState("");
   const [phase, setPhase] = useState<"authorizing" | "loading" | "rendering" | "ready" | "error">("authorizing");
   const phaseRef = useRef(phase);
+  const [usageWarning, setUsageWarning] = useState("");
   phaseRef.current = phase;
   function changePhase(value: typeof phase) { phaseRef.current = value; setPhase(value); }
   const loaded = phase === "ready";
@@ -233,9 +235,13 @@ function EmbeddedReport({ ref, selection, report, title, onView, onEdit, onClose
     let capacityChecked = false;
     let capacityResumed = false;
     let instance = 0;
-    const request = (mode = tokenMode, recoverCapacity = false) => "modelId" in selection
+    const measurement = reportRenderMeasurement();
+    const request = (mode = tokenMode, recoverCapacity = false, trackRender = false) => "modelId" in selection
       ? api<EmbedConfiguration>("/api/embed/create", "POST", { modelId: selection.modelId, ...(recoverCapacity ? { recoverCapacity } : {}) })
-      : api<EmbedConfiguration>("/api/embed/report", "POST", { contentId: selection.contentId, mode, ...(recoverCapacity ? { recoverCapacity } : {}) });
+      : api<EmbedConfiguration>("/api/embed/report", "POST", { contentId: selection.contentId, mode,
+        ...(recoverCapacity ? { recoverCapacity } : {}),
+        ...(trackRender ? { render: { requestedAt: measurement.requestedAt,
+          ...(configuration?.renderReceipt ? { receipt: configuration.renderReceipt } : {}) } } : {}) });
     function schedule(config: EmbedConfiguration) {
       clearTimeout(timer);
       timer = setTimeout(() => { void authorize().catch(fail); }, Math.max(5_000, Date.parse(config.expiration) - Date.now() - 120_000));
@@ -265,7 +271,7 @@ function EmbeddedReport({ ref, selection, report, title, onView, onEdit, onClose
         const generation = instance;
         active.current = undefined; embedded = undefined; service.reset(container);
         changePhase("authorizing"); setNotice("Checking whether this report's capacity needs to start...");
-        void request(tokenMode, true).then(config => {
+        void request(tokenMode, true, !creating).then(config => {
           if (disposed || generation !== instance) return;
           if (config.capacityResumed) {
             capacityResumed = true; configuration = config; sdkPermissions = undefined;
@@ -297,10 +303,18 @@ function EmbeddedReport({ ref, selection, report, title, onView, onEdit, onClose
       current.setComponentTitle(config.create ? "New report editor" : "Power BI report");
       stopLifecycle = bindReportLifecycle(current, { creating: config.create,
         onRendering: () => { if (isCurrent()) changePhase("rendering"); },
+        onRendered: () => {
+          if (!isCurrent()) return;
+          const render = measurement.complete(config.renderReceipt);
+          if (render) void api("/api/telemetry/report-rendered", "POST", render, { keepalive: true })
+            .catch(() => { if (isCurrent()) setUsageWarning("Report ready, but its usage record could not be confirmed."); });
+        },
         onReady: () => {
           if (!isCurrent()) return;
           changePhase("ready");
           if (capacityResumed) setNotice("Capacity is running. Report ready.");
+          if (!config.create && (!config.renderReceipt || config.renderTrackingUnavailable))
+            setUsageWarning("Report ready, but usage tracking is unavailable.");
         } });
       current.on("error", event => {
         if (!isCurrent()) return;
@@ -323,11 +337,11 @@ function EmbeddedReport({ ref, selection, report, title, onView, onEdit, onClose
       });
       schedule(config);
     }
-    setError(""); setNotice(""); changePhase("authorizing"); setSaving(false); setUncertain(false); setSaveKind(undefined);
+    setError(""); setNotice(""); setUsageWarning(""); changePhase("authorizing"); setSaving(false); setUncertain(false); setSaveKind(undefined);
     pending.current = undefined; active.current = undefined;
     void (async () => {
       try {
-        configuration = await request();
+        configuration = await request(tokenMode, false, !creating);
         if (!disposed) mount(configuration);
       } catch (e) { fail(e); }
     })();
@@ -389,6 +403,7 @@ function EmbeddedReport({ ref, selection, report, title, onView, onEdit, onClose
       </div>
     </div>
     {error && <div role="alert" className="error">{error}</div>}
+    {usageWarning && <p className="warning" role="status">{usageWarning}</p>}
     {notice && <div role="status" className="notice report-notice"><span>{notice}</span>
       <button onClick={() => setNotice("")} aria-label="Dismiss notification">Dismiss</button></div>}
     {saving && <p role="status">Saving report...</p>}

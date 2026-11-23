@@ -323,6 +323,15 @@ For every embed-configuration request, the backend must:
   role flags on upgrade; never silently strip or expand them.
 - Keep Platform admin and Tenant admin views separate, including for dual-role
   users. Never mount TenantManager inside platform screens.
+- Report usage measures only the first completed existing-report render per
+  open/reload. Keep the original monotonic start and signed receipt across
+  capacity recovery; never count token refreshes, later SDK renders or unsaved
+  new-report editor readiness. Bind receipts to backend-authorized user/tenant/
+  report/workspace context, authenticate and CSRF-protect completion, and make
+  storage idempotent. Do not persist tokens/report data or let tracking failures
+  block report consumption. Schema migration 4 is required for render storage.
+  Future admin insight reports require isolated tenant data and explicit admin
+  access; their onboarding packaging is still deferred.
 - Platform administration has separate Fleet Management, Tenant Details and
   Add Tenant screens. `platform.tsx` owns hash navigation; `tenant-details.tsx`
   owns the existing guided setup/admin/readiness workflow. Fleet lists every

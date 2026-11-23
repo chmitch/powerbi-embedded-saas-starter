@@ -322,7 +322,7 @@ The tables are:
 
 | Table | Stored state |
 | --- | --- |
-| `SchemaVersions` | Applied migration versions (currently 1-3) |
+| `SchemaVersions` | Applied migration versions (source defines versions 1-4) |
 | `Tenants` | Workspace mapping, embedding-identity references, lifecycle/readiness, primary administrator |
 | `Users` | Stable directory identity, sole tenant, admin flags, root permission defaults |
 | `Content` | Reports/models, external IDs, report-model dependency, publication/deletion/security flags |
@@ -330,12 +330,13 @@ The tables are:
 | `Grants` | User/item permission masks scoped to a tenant |
 | `Settings` | Bootstrap completion and verified workspace-capacity bindings |
 | `Audit` | Safe actor/action/resource/outcome records |
+| `ReportRenders` | Completed initial report renders: authenticated identity and report snapshots, request/receipt/completion times and elapsed milliseconds |
 | `Sessions` | Encrypted server-side session and token-cache data with expiry |
 | `ProvisioningOperations` | Idempotent setup/sample requests, progress, checkpoints, lease and outcome |
 
 Migrations run under a SQL application lock. Version 2 preserves existing users
 while allowing platform-only admins; version 3 adds setup operations and primary
-admin metadata. Tenant-aware constraints, exclusive workspace/root/content
+admin metadata; version 4 adds report-render history. Tenant-aware constraints, exclusive workspace/root/content
 indexes, and transactions protect associations. No invitation, external-identity,
 custom-role, outbox, or separate dependency-graph tables are implemented.
 
@@ -345,6 +346,63 @@ New items get unpublished content/security nodes. Existing aliases/grants surviv
 backing-item renames; deletions/dependencies are recorded. Invalid/incomplete
 responses do not intentionally become successful empty inventories.
 Embed requests independently recheck live dependencies.
+
+### Report render history and planned administrator insights
+
+Each open/reload of an existing report records at most one initial successful
+SDK `rendered` event in `app.ReportRenders`, including view/edit/copy modes.
+Browser timing starts immediately before the initial embed request and uses
+`performance.now()` through first render completion. It includes authentication,
+token generation, loading and any capacity startup/recovery. Recovery retains the
+original start and receipt; token renewals, `loaded`, later page/filter renders,
+and unsaved new-report editor readiness do not create usage records.
+Mode is the initial embed authorization mode; a later Save As/copy authorization
+inside an already rendered editing session is not another initial render.
+
+After successful embed authorization, the backend issues a short-lived,
+purpose-separated HMAC receipt using the existing persistent session signing
+secret. It binds a server-generated render ID to the authenticated user/directory/
+object ID, tenant, registered report and workspace IDs, report/user name snapshots,
+mode, client request timestamp, and server request-receipt timestamp. The browser
+cannot substitute another actor, tenant or report. Completion requires current
+sign-in, matching identity/tenant and CSRF; receipts expire after 24 hours.
+Recording does not mint tokens or require new Fabric calls.
+
+A serializable transaction and unique render ID prevent replay/concurrent
+completion from adding rows or overwriting the first measurement. Identity and
+report IDs/names are historical snapshots, without user/content foreign keys
+that would prevent later offboarding or artifact removal.
+`RequestedAt` is the browser's UTC request timestamp; `ServerReceivedAt` is captured
+before session/capacity recovery; `DurationMs` is monotonic client elapsed time;
+`RenderedAt` is derived from the client start plus that duration; `RecordedAt`
+is the database UTC ingestion timestamp. Clock skew can affect client timestamps.
+Durations are client-reported diagnostics, not tamper-proof proof of viewing or
+billing-grade measurements. No tokens, filter values, report data or IP addresses
+are retained in these records.
+
+Completion is a small same-origin keepalive request. Tracking failures do not
+block report interaction and show a warning; abandoned loads, unavailable storage,
+expired sessions or failed delivery can leave no record. There is no durable
+browser queue, automatic write replay or retention job. Apply migration 4 before
+enabling this code in an existing deployment; code-only ZIP publication does not
+apply migrations.
+
+The accepted long-term direction includes platform-admin and tenant-admin
+embedded insight/audit reports, with tenant reports packaged during onboarding.
+These reports, their packaging and admin-only access enforcement are
+**not implemented** here. Future tenant analytical
+models must receive only the owning tenant's data through enforced extraction/
+data-source isolation; do not expose the shared management SQL database to
+tenant principals or rely on report filters for tenant isolation.
+
+#### Administrator reporting TODOs
+
+- [ ] Add platform-admin usage, render-performance and audit reports with explicit
+  platform authorization and a separate analytical/embedding path that does not
+  grant access to customer report content.
+- [ ] Add tenant-admin-only usage, render-performance and audit reports with
+  enforced tenant-isolated data and normal report/model authorization; package
+  and deploy them during new tenant onboarding.
 
 Power BI report/model discovery must not depend on unsupported Fabric item events.
 Distributed reconciliation, transactional outbox dispatch, comprehensive inventory

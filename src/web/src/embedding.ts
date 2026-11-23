@@ -23,7 +23,7 @@ interface ReportEvents {
 }
 
 export function bindReportLifecycle(report: ReportEvents, options: {
-  creating: boolean; onRendering: () => void; onReady: () => void;
+  creating: boolean; onRendering: () => void; onReady: () => void; onRendered?: () => void;
 }) {
   let active = true;
   let started = false;
@@ -39,6 +39,7 @@ export function bindReportLifecycle(report: ReportEvents, options: {
   };
   const rendered = () => {
     if (!active || !started || ready || options.creating) return;
+    options.onRendered?.();
     ready = true; options.onReady();
   };
   report.on("loaded", loaded);
