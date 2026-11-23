@@ -27,7 +27,18 @@ export interface ManageData { tenant: Tenant; content: ContentItem[]; users: Use
 export interface Catalog { tenant: { Name: string; Status: string }; reports: ReportItem[]; models: ContentItem[]; nodes: NavNode[] }
 export interface Workspace { id: string; name: string; tenant: string | null; capacityId?: string }
 export interface Capacity { id: string; displayName: string; state: string }
-export interface ArmCapacity { name: string; sku: { name: string }; properties: { state: string; provisioningState: string } }
+export interface ArmCapacity { name: string; sku: { name: string }; properties: { state?: string; provisioningState?: string } }
+export interface TenantCapacity extends ArmCapacity { tenants: { id: string; name: string }[] }
+export interface CapacityInventory {
+  value: TenantCapacity[]; issues: string[]; excludedTenants: { id: string; name: string }[];
+}
+export interface TenantCapacityStatus { capacity: TenantCapacity | null; issue: string | null }
+export interface CapacityResult {
+  name: string; status: "accepted" | "skipped" | "failed" | "succeeded" | "unconfirmed"; message: string;
+}
+export interface CapacityPolicyStatus {
+  enabled: boolean; source: "deployment" | "platform"; revision: string | null; available: boolean; issue: string | null;
+}
 export interface Check { key: string; status: string; message: string }
 export interface SetupOperation {
   id: string; tenantId: string; status: "Running" | "Interrupted" | "Succeeded" | "Failed";

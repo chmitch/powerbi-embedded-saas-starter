@@ -56,6 +56,9 @@ table { border-collapse: collapse; width: 100%; margin-top: 1rem; text-align: le
 th, td { padding: .85rem .75rem; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
 th { font-size: .8rem; font-weight: 600; letter-spacing: .025em; color: var(--muted); background: #f8fafe; }
 tbody tr:hover { background: #fbfcff; }
+.platform-navigation { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; margin: .7rem 0 1rem; }
+.platform-navigation > span { padding: .45rem .75rem; color: var(--muted); font-weight: 600; }
+.tenant-link { color: var(--accent); padding: 0; justify-content: flex-start; text-align: left; }
 small { display: block; color: var(--muted); font-size: .85rem; }
 .error, .notice { padding: .8rem 1rem; border-radius: .6rem; margin-bottom: 1rem; }
 .error { background: #fff0ef; border: 1px solid #f1b5b1; color: #8e221a; }

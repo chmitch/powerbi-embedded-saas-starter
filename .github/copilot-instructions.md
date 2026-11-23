@@ -22,6 +22,11 @@
   own-tenant admin status and a pinned workspace, and never run infrastructure
   steps or change grants/readiness. Recognize initial/manual seeding to prevent
   duplicate uploads; tenant endpoints must not resume platform setup operations.
+  An older failed setup may stop blocking sample addition only after a later
+  setup succeeds and the original sample step is still pending with no upload
+  intent, import ID, publication or recovery uncertainty. Preserve the original
+  operation; never bypass attempted or ambiguous imports.
+  Reject retries of that superseded initial request before launching its worker.
 - Distinguish confirmed user requirements from recommended defaults, working
   assumptions, future goals, and unresolved decisions. Do not silently promote a
   recommendation to an accepted decision or describe planned behavior as working.
@@ -317,7 +322,21 @@ For every embed-configuration request, the backend must:
   tenant-admin role, or report permissions. Preserve existing memberships and
   role flags on upgrade; never silently strip or expand them.
 - Keep Platform admin and Tenant admin views separate, including for dual-role
-  users. Never mount TenantManager inside the platform tenant selector.
+  users. Never mount TenantManager inside platform screens.
+- Platform administration has separate Fleet Management, Tenant Details and
+  Add Tenant screens. `platform.tsx` owns hash navigation; `tenant-details.tsx`
+  owns the existing guided setup/admin/readiness workflow. Fleet lists every
+  registered tenant, including unconfigured/unmapped ones, with associated
+  capacity state and shared-impact confirmations. Keep fleet lifecycle/policy
+  controls out of tenant details and creation forms. Accepted setup/adoption
+  opens its details, never cancels work on navigation, and retains checkpoints.
+  Configuration checks inspect saved state and must not overwrite unsaved fields.
+  Targeted tenant repairs may resume only currently verified customer compute,
+  with explicit billing/shared-impact confirmation, or restore confirmed configured
+  principal workspace access. Inspect membership before add/update; observe
+  accepted resume before readiness recheck. Replacement compute uses the existing
+  durable setup form. Never replay repairs, recreate uncertain identities, or
+  infer that a generic 403 proves a missing workspace role.
 - Keep tenant onboarding as one guided form: workspace name, admin UPN, and
   existing/shared capacity or new capacity size with billing confirmation.
   Service-principal creation is implied; the backend orchestrates identity,
@@ -391,12 +410,35 @@ For every embed-configuration request, the backend must:
   if a service identity or administrator can access them.
 - Provide platform administration of Fabric capacities: create, delete, resize,
   pause, resume, and assign capacities to tenant workspaces.
+- `src\server\src\capacity-management.ts` owns protected ARM inventory, live tenant
+  associations, state-aware changes and bulk pause/resume. The platform UI in
+  `src\web\src\capacity-manager.tsx` shows fleet/shared tenant resources and
+  observes accepted requests independently; never equate HTTP 202 with completion.
+- Bulk capacity actions require exact confirmed resource names and current
+  registered-workspace assignments. Target each shared capacity once within the
+  configured subscription/resource group, exclude management/unassigned resources,
+  and block on unverifiable/ambiguous mappings. Never substitute cached recovery
+  bindings for current assignments or accept browser-supplied ARM scope/URLs.
+- Continue after individual bulk failures and audit each result; stop further
+  requests if audit storage is unavailable. Never replay capacity writes
+  automatically or imply rollback. Closing the page stops browser polling, not
+  submitted Azure work; backend submission is not a durable queue.
+- `capacity-policy.ts` and the platform automatic-resume control manage a global
+  persisted billing opt-in. Store its versioned revision in the existing external
+  credential store, not SQL, and load it before SQL-backed sessions. Saved policy
+  overrides the deployment default; denied/invalid/disabled/expired records fail
+  closed, never silently revert to an enabled env flag. Use existing runtime
+  reader/provisioning writer permissions, not broad App Service settings-write
+  access. Require platform authority, CSRF, current revision, billing confirmation
+  on enable, and global audit. Never automatically retry uncertain policy writes.
 - Keep Azure capacity resource management separate from Fabric/Power BI workspace
   management. Apply the permissions required by each API independently.
 - Use a separately scoped provisioning identity for privileged resource changes;
   ordinary embedding identities must not receive capacity-deletion privileges.
-- Treat provisioning and capacity changes as asynchronous operations with
-  persistent status, retries, audit history, and safeguards for affected tenants.
+- Treat provisioning and capacity changes as asynchronous operations with audit
+  history and safeguards for affected tenants. Provisioning uses durable SQL
+  checkpoints; capacity controls currently observe ARM state in the browser,
+  with explicit retries only after inspecting potentially submitted work.
 - Tenant administrators manage users and permissions only within their tenant.
   Managing application users does not imply general Entra directory admin rights.
 - Support distinct permissions for viewing, editing, creating, and copying reports,

@@ -422,6 +422,13 @@ recognized, so repeated requests reopen the existing operation instead of
 importing a second copy or republishing content edited/unpublished afterward.
 Standalone sample failures do not change tenant readiness or block other reports.
 Tenant sample endpoints cannot retry platform setup operations.
+An initial setup failure is not treated as an existing sample when its sample
+step never started, no upload/checkpoint or recovery uncertainty exists, and the
+latest tenant setup subsequently succeeded. This allows a separate tenant-admin
+sample request without changing the historical failure. Attempted, accepted,
+completed and ambiguous imports continue to block a second import.
+The superseded initial request cannot be retried through the platform endpoint
+to bypass this rule or replay old infrastructure settings.
 
 After administrator appointment and runtime verification, the worker uses that
 tenant's service principal to submit a multipart Power BI import into its
@@ -467,8 +474,46 @@ substitute the operator's token for embedding.
 
 ARM manages capacity create/resize/pause/resume/delete; Fabric/Power BI APIs
 assign workspaces. Multiple tenant workspaces can share a capacity without
-reserving it or changing other assignments. Current UI waits for actual completion
-rather than treating request acceptance as success.
+reserving it or changing other assignments. **Platform admin > Fleet Management**
+automatically loads tenant configuration status, ARM state and registered capacity
+associations. Its tenant rows offer pause/resume and links to separate
+**Tenant Details**; an expandable resource inventory retains resize/delete.
+**Add Tenant** is a separate guided provisioning/adoption screen, which hands off
+accepted operations to tenant details for durable progress. Details show
+configuration/admin controls, identity/workspace facts and explicit saved-state
+readiness checks, without fleet-wide capacity controls. Platform navigation uses
+hash URLs for browser back/forward and direct tenant links; the same guarded
+backend APIs remain authoritative.
+Failed tenant findings expose narrow repair APIs: current-assignment-verified
+customer capacity resume and confirmed configured-principal workspace access
+repair. Both require platform authorization, CSRF and audit, and are blocked
+during running setup. Membership is inspected before choosing Add (POST) or
+Update (PUT); already-correct Admin membership is skipped. Accepted resumes
+are observed before rechecking readiness, without write replay. Replacement
+capacity choices use durable guided setup rather than a second creation path.
+Unknown credentials/group/tenant-policy failures remain explicit manual findings.
+Individual pause/resume/resize controls check
+stable resource state and skip already-satisfied requests. Resize preserves
+workspace assignments, tenant content and permissions.
+
+`capacity-management.ts` combines scoped, paginated ARM inventory with SQL tenant
+mappings and current delegated Power BI workspace/capacity discovery. It requires
+a unique Fabric-to-ARM match; persisted auto-resume bindings are not the bulk
+selection authority. **Pause all tenant capacities** and **Resume all tenant
+capacities** include distinct currently assigned customer resources only, within
+the configured subscription/resource group. Management and unassigned resources
+are excluded, known out-of-scope tenant capacities are reported, and unverifiable
+assignments block bulk submission. The browser confirms the exact resource set;
+the backend rejects stale selections and rechecks assignments before each change.
+
+Bulk changes are sequential, audit each result, skip resources already in the
+desired state and continue after individual failures. SQL/audit failure stops
+further requests. There is no rollback or durable capacity-operation queue;
+interrupted backend requests can leave partially submitted work. Azure acceptance
+is distinct from completion. The browser polls each accepted resource every five
+seconds for up to 15 minutes, reports failures/unconfirmed outcomes, and stops
+observation on unmount. Refresh Azure state before a deliberate retry; submitted
+capacity writes are never automatically replayed.
 
 Management workspace/capacity IDs are externally pinned. They are excluded from
 adoption, tenant assignment, in-app customer capacity mutation and embedding,
@@ -476,11 +521,36 @@ even if tenant records are misconfigured. Tenant principals never access them.
 Capacity deletion blocks known registered-workspace assignments but cannot prove
 the absence of unmanaged consumers. Shared-capacity changes affect every assigned
 tenant; full impact/decommissioning workflows and load-based sizing remain work.
+Resume restarts compute billing. Enabled automatic resume can wake a manually
+paused tenant capacity; pausing does not create a persistent no-resume policy.
 
 ### Capacity recovery
 
-`AutoResumeCapacities` is an explicit billing opt-in, default `false`;
-`-EnableCapacityAutoResume` enables it and reruns preserve a saved opt-in.
+`AutoResumeCapacities` is the initial billing opt-in, default `false`;
+`-EnableCapacityAutoResume` enables the deployment default and reruns preserve it.
+Platform admins can inspect, enable or disable the effective policy in
+**Fleet Management > Automatic capacity resume**. The disabled state prompts
+for an explicit opt-in; enabling requires billing confirmation. This is an
+application policy, not a Fabric resource property.
+
+`capacity-policy.ts` persists a versioned boolean/revision record under
+`capacity-auto-resume-policy` in the existing Key Vault/development credential
+store, not SQL. A saved policy overrides deployment configuration across
+restarts. The runtime loads it before database/session access and refreshes it
+on foreground demand with a one-minute cache; admin reads force refresh.
+Only a genuine missing record falls back to the deployment default. Denied,
+invalid, disabled or expired records disable recovery and produce a platform
+warning. Existing credential-store reader/writer grants are reused; no broader
+App Service ARM write role is needed.
+
+Admin updates require platform authority, CSRF, current revision and billing
+confirmation, with global audit intent/completion. In-process serialization
+prevents stale reads/writes from restoring an old policy; uncertain writes are
+read back without replay. This targets the maintained single-instance deployment,
+not a cross-instance compare-and-swap protocol. Turning the policy off does not
+pause resources or cancel already submitted Azure work. If SQL is already
+unavailable with recovery disabled, an Azure operator must restore compute before
+using the console; a saved disabled policy remains authoritative over an env flag.
 There is no successful-path capacity preflight or daily schedule.
 
 On a relevant foreground SQL connection/read failure, recovery checks the

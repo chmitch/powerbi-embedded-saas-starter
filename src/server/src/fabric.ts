@@ -160,6 +160,40 @@ export class FabricService {
     }
     return this.repo.tenant(id);
   }
+  async repairWorkspaceAccess(id: string, operatorToken: string, workspaceId: string, principalId: string, actor: User) {
+    requireCondition(this.azure.config.ManagementWorkspaceId, 409, "MissingManagementConfiguration",
+      "Workspace access repair requires a pinned management workspace reference.");
+    const tenant = await this.repo.tenant(id);
+    assertNotManagementResource(tenant.WorkspaceId, this.azure.config.ManagementWorkspaceId);
+    requireCondition(tenant.WorkspaceId && tenant.EmbeddingObjectId, 409, "MissingConfiguration",
+      "Complete tenant workspace and identity setup before repairing access.");
+    requireCondition(sameId(workspaceId, tenant.WorkspaceId) && sameId(principalId, tenant.EmbeddingObjectId),
+      409, "TenantConfigurationChanged", "The configured workspace or service principal changed. Refresh before confirming access repair.");
+    const users = await this.operator<Collection<{ identifier?: string; groupUserAccessRight: string }>>(
+      operatorToken, `/groups/${tenant.WorkspaceId}/users`);
+    requireCondition(Array.isArray(users.value), 502, "WorkspaceAccessUnverified", "The workspace membership inventory is incomplete.");
+    const matches = users.value.filter(user => sameId(user.identifier, tenant.EmbeddingObjectId));
+    requireCondition(matches.length <= 1, 409, "WorkspaceAccessUnverified", "The configured principal's workspace membership is ambiguous.");
+    if (matches[0]?.groupUserAccessRight === "Admin") {
+      await this.repo.audit(actor, "RepairTenantWorkspaceAccess", tenant.Id, "Skipped", tenant.Id);
+      return { status: "skipped", message: "Workspace Admin access is already configured. Recheck credentials, group restrictions and Fabric tenant settings if runtime access still fails." };
+    }
+    await this.repo.audit(actor, "RepairTenantWorkspaceAccess", tenant.Id, "Requested", tenant.Id);
+    try {
+      await this.operator(operatorToken, `/groups/${tenant.WorkspaceId}/users`, matches.length ? "PUT" : "POST",
+        { identifier: tenant.EmbeddingObjectId, groupUserAccessRight: "Admin", principalType: "App" });
+    } catch (error) {
+      await this.repo.audit(actor, "RepairTenantWorkspaceAccess", tenant.Id, "Failed", tenant.Id);
+      throw new AppError(error instanceof AppError ? error.status : 502,
+        error instanceof AppError ? error.code : "WorkspaceAccessOutcomeUnknown",
+        "Workspace access repair could not be confirmed. Check operator permissions and recheck the tenant before retrying; a change may already have been applied.");
+    }
+    try { await this.repo.audit(actor, "RepairTenantWorkspaceAccess", tenant.Id, "Applied", tenant.Id); }
+    catch { throw new AppError(503, "WorkspaceAccessAuditUnavailable",
+      "Workspace access may already have been repaired, but its completion audit failed. Recheck the tenant before retrying."); }
+    return { status: "applied", message: "Configured service-principal workspace Admin access applied. Permissions may take time to propagate." };
+  }
+
   async readiness(id: string, operatorToken: string) {
     const tenant = await this.repo.tenant(id);
     const checks: Check[] = [];

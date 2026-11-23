@@ -317,6 +317,53 @@ it("recognizes the sample seeded during platform setup rather than importing or 
   assert.ok(f.content.every(c => !c.Published));
 });
 
+it("allows adding the sample after a later setup succeeds when the original setup failed before importing", async () => {
+  const f = fixture(), provisionIdentity = f.fabric.provisionIdentity;
+  f.fabric.provisionIdentity = async id => {
+    await provisionIdentity(id);
+    throw new AppError(502, "Upstream403", "Identity access forbidden.");
+  };
+  const original = await f.service.start({ ...f.input(), includeSample: true }, actor, "operator@contoso.com", "token");
+  await f.drain();
+  assert.equal(f.service.view(await f.service.operation(original.id)).status, "Failed");
+  assert.equal(f.state.sampleUploads, 0);
+  f.fabric.provisionIdentity = provisionIdentity;
+  const replacement = await f.service.start(f.input(), actor, "operator@contoso.com", "token", original.tenantId);
+  const admin = member(original.tenantId, ids.admin, true);
+  assert.equal((await f.service.sampleStatus(admin)).operation?.id, original.id,
+    "An unfinished replacement must not hide the original setup failure");
+  await f.drain();
+  assert.equal(f.service.view(await f.service.operation(replacement.id)).status, "Succeeded");
+  assert.equal((await f.service.sampleStatus(f.users[0]!)).operation, null);
+  await assert.rejects(f.service.retry(original.id, actor, "token"), { code: "CannotRetry" });
+  const sample = await f.service.addSample(f.users[0]!, randomUUID());
+  assert.notEqual(sample.id, original.id); assert.equal(sample.status, "Running");
+  await f.drain();
+  assert.equal((await f.service.sampleStatus(f.users[0]!)).operation?.status, "Succeeded");
+  assert.equal(f.state.sampleUploads, 1);
+  assert.equal(f.state.identityCreations, 1); assert.equal(f.state.workspaceCreations, 1);
+  await assert.rejects(f.service.retry(original.id, actor, "token"), { code: "CannotRetry" });
+  assert.equal(f.tenants.get(original.tenantId)!.Status, "Ready");
+  assert.equal(f.service.view(await f.service.operation(original.id)).status, "Failed",
+    "The historical failure must remain intact for platform diagnostics");
+});
+
+it("does not bypass an attempted sample import after a later setup succeeds", async () => {
+  for (const failure of ["samplePending", "ambiguousUpload", "sampleFailed", "sampleDenied"] as const) {
+    const f = fixture({ pollLimit: 2 }); f.state[failure] = true;
+    const original = await f.service.start({ ...f.input(), includeSample: true }, actor, "operator@contoso.com", "token");
+    await f.drain();
+    assert.equal(f.service.view(await f.service.operation(original.id)).status, "Failed");
+    const replacement = await f.service.start(f.input(), actor, "operator@contoso.com", "token", original.tenantId);
+    await f.drain();
+    assert.equal(f.service.view(await f.service.operation(replacement.id)).status, "Succeeded");
+    assert.equal((await f.service.sampleStatus(f.users[0]!)).operation?.id, original.id);
+    assert.equal((await f.service.addSample(f.users[0]!, randomUUID())).id, original.id);
+    await f.drain();
+    assert.equal(f.state.sampleUploads, 1);
+  }
+});
+
 it("retries tenant-admin imports with the saved ID while leaving unrelated tenant availability unchanged", async () => {
   const f = fixture({ pollLimit: 2 });
   const setup = await f.service.start(f.input(), actor, "operator@contoso.com", "token"); await f.drain();

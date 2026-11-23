@@ -11,7 +11,8 @@ The application supports:
 
 - Platform administration: create/adopt tenant workspaces, appoint tenant admins,
   optionally seed new tenants with a bundled sample report/model, and create,
-  assign, resize, pause, resume, or delete customer Fabric capacities.
+  assign, resize, pause, resume, or delete customer Fabric capacities. Bulk pause
+  and resume target only capacities currently assigned to registered tenants.
 - Tenant administration: register existing Entra users, synchronize and publish
   content, add the bundled sample report, and manage shared navigation with
   inherited folder/report permissions.
@@ -252,6 +253,38 @@ include the bundled sample, or their tenant admin can add it later. For other
 content, use external publishing tools and
 then synchronize/review it in the portal.
 
+### Manage customer capacities
+
+Open **Platform admin > Fleet Management**. The tenant fleet lists every tenant,
+its configuration status and associated capacity/compute state, with quick
+**Pause/Resume** actions. Select a tenant name or **Open details** to edit its
+configuration on a separate **Tenant Details** screen. **Add Tenant** opens the
+separate provisioning/adoption experience.
+Capacity states and associations load automatically. Expand **All customer
+capacity resources (including unassigned)** for resource-level resize/delete.
+Shared-capacity operations affect every workspace using it, not just that tenant.
+
+**Pause all tenant capacities** and **Resume all tenant capacities** require
+confirmation of the affected resources. They include each assigned capacity once
+within the configured subscription/resource group, excluding management compute,
+unassigned resources and capacities outside that scope. Unverifiable assignments
+disable bulk actions. Individual failures do not stop the remaining requests;
+review the per-capacity results and observed Azure state before retrying.
+Acceptance is not completion: the page polls status while open.
+
+Resume restarts compute billing. If `AutoResumeCapacities` is enabled, later
+authorized report access can wake a manually paused tenant capacity. See the
+[capacity operating guide](docs/administration.md#operate-customer-capacities)
+for interruption, deletion and partial-failure limitations.
+
+**Automatic capacity resume** on Fleet Management shows the effective application
+policy. When disabled, it prompts the platform admin to opt in; **Enable automatic
+resume** requires billing confirmation. **Disable automatic resume** turns off
+future recovery without pausing running compute. The saved platform policy
+overrides the deployment default and persists in Key Vault (the external local
+credential file in development), not SQL, so it remains readable while management
+compute is paused. Health checks and background jobs never wake capacities.
+
 ## First sign-in and tenant onboarding
 
 1. Open the local or deployed URL and choose **Sign in with Microsoft**. The
@@ -259,7 +292,7 @@ then synchronize/review it in the portal.
    Only that configured identity can select **Complete setup** under
    **Initial administration**.
 2. Bootstrap creates a platform-only administrator, without tenant membership,
-   report access, or a customer workspace. In **Platform admin**, provision a
+   report access, or a customer workspace. In **Platform admin > Add Tenant**, provision a
    tenant using a workspace name, exact administrator UPN, and either an active
    existing customer capacity or a newly purchased capacity with billing approval.
    Existing workspaces can also be explicitly adopted.
@@ -270,6 +303,13 @@ then synchronize/review it in the portal.
    workspace, grants, assignment, and administrator before verifying access.
    Separate tenant workspaces may share one customer capacity. The protected
    management workspace/capacity cannot be selected.
+   Accepted creation opens **Tenant Details** with durable setup progress.
+   This screen also shows administrators, workspace/service-principal IDs, and
+   saved readiness findings; **Check configuration** refreshes the checks without
+   saving unsaved edits or creating infrastructure.
+   Failed checks provide confirmed capacity resume and service-principal access
+   repair, or prepare a replacement capacity through the same setup form.
+   See [configuration repair safeguards](docs/administration.md#repair-failed-tenant-configuration-checks).
 4. Sign in as that tenant's administrator. If the sample was included, it is
    already registered, published and available in report navigation. For other
    content, publish reports/models to its assigned
@@ -322,6 +362,7 @@ Restart the app after configuration changes.
 | `SqlServer`, `SqlDatabase` | Fabric's actual transactional TDS hostname/catalog |
 | `LocalSecretsPath` or `KeyVaultUri` | Explicit local store or production vault; never secret values |
 | `ManagementWorkspaceId`, `ManagementCapacityId`, `ManagementCapacityResourceId` | Protected infrastructure references |
+| `AutoResumeCapacities` | Initial billing opt-in, default false; a saved platform policy overrides it |
 | `PublicOrigin` | Browser origin used for the Entra callback |
 | `RuntimeManagedIdentityClientId`, `ProvisioningManagedIdentityClientId` | Distinct production managed identities |
 

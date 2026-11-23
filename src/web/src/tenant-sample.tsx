@@ -36,6 +36,8 @@ export function TenantSample({ tenantId, version, busy, run }: {
     return () => { disposed = true; clearTimeout(timer); };
   }, [tenantId, operation?.id, operation?.status]);
   const complete = operation?.status === "Succeeded";
+  const failedSetupStep = operation?.status === "Failed"
+    ? operation.steps.find(step => step.status === "failed" && step.key !== "sample") : undefined;
   const blocked = operation && (operation.status === "Running" || operation.recoveryRequired ||
     (!operation.canRetry && !complete));
   return <div aria-busy={loading || operation?.status === "Running"}>
@@ -48,7 +50,8 @@ export function TenantSample({ tenantId, version, busy, run }: {
     </button>
     <small>Import and publish the bundled Store Sales report and model in this tenant.
       Existing content and user permissions are preserved. The sample is added at most once.</small>
-    {operation && <p role="status">Sample: {operation.status}.
+    {failedSetupStep ? <p role="status">Sample not added. Initial tenant setup failed at: {failedSetupStep.label}.
+      The sample import has not started.</p> : operation && <p role="status">Sample: {operation.status}.
       {operation.status === "Running" && " Waiting for import and metadata registration."}</p>}
     {operation?.error && <p className="error">{operation.error}</p>}
     {operation?.recoveryRequired && <p className="warning">Ask a platform administrator to reconcile the workspace/import history before recovery. No duplicate upload will be attempted.</p>}

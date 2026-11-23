@@ -7,6 +7,7 @@ import { AzureServices } from "../src/azure.js";
 import { Database } from "../src/db.js";
 import { config } from "../src/config.js";
 import { AppError } from "../src/errors.js";
+import { CapacityPolicy } from "../src/capacity-policy.js";
 import { FabricService } from "../src/fabric.js";
 import { Repository } from "../src/repository.js";
 import { createApp } from "../src/app.js";
@@ -171,6 +172,8 @@ it("rechecks authorization after a foreground capacity resume before issuing any
 });
 it("does not wake on health probes but recovers an anonymous first-visit bootstrap read without SQL-backed authentication", async context => {
   context.mock.method(AzureServices.prototype, "secret", async () => "fixture-only-session-key");
+  context.mock.method(CapacityPolicy.prototype, "refresh", async () =>
+    ({ enabled: true, source: "deployment" as const, revision: null, available: true, issue: null }));
   const arm: string[] = [];
   let paused = true, failed = false;
   context.mock.method(AzureServices.prototype, "capacityResource", async (id, method = "GET") => {

@@ -91,6 +91,17 @@ export class TenantProvisioner {
     const [operation] = await executor.query<Operation>(`SELECT TOP(1) * FROM app.ProvisioningOperations
       WHERE TenantId=@id AND (JSON_VALUE(StateJson,'$.kind')='sample' OR JSON_VALUE(RequestJson,'$.includeSample')='true')
       ORDER BY CreatedAt DESC`, { id: tenantId });
+    if (operation?.Status === "Failed") {
+      const state = JSON.parse(operation.StateJson) as OperationState;
+      if (state.kind !== "sample" && !state.recoveryRequired && !state.sample?.requested &&
+        !state.sample?.importId && !state.sample?.published &&
+        state.steps.find(step => step.key === "sample")?.status === "pending") {
+        const [latest] = await executor.query<Operation>(
+          "SELECT TOP(1) * FROM app.ProvisioningOperations WHERE TenantId=@id ORDER BY CreatedAt DESC", { id: tenantId });
+        if (latest?.Status === "Succeeded" && !sameId(latest.Id, operation.Id) &&
+          (JSON.parse(latest.StateJson) as OperationState).kind !== "sample") return undefined;
+      }
+    }
     return operation;
   }
   async sampleStatus(actor: User) {
@@ -240,6 +251,13 @@ export class TenantProvisioner {
     requireCondition(sameId(operation.ActorId, actor.Id), 403, "OriginalOperatorRequired", "The operator who started this setup must resume it.");
     const view = this.view(operation);
     requireCondition(view.canRetry, 409, "CannotRetry", "This operation is running, complete, or requires manual resource recovery.");
+    const state = JSON.parse(operation.StateJson) as OperationState;
+    if (state.kind !== "sample" && state.input.includeSample &&
+      state.steps.find(step => step.key === "sample")?.status === "pending") {
+      const current = await this.latestSample(operation.TenantId);
+      requireCondition(current && sameId(current.Id, operation.Id), 409, "CannotRetry",
+        "A later setup completed or another sample request replaced this operation. Reopen the tenant and use its current sample controls.");
+    }
     const updated = await this.repo.db.query(`UPDATE app.ProvisioningOperations
       SET Status='Running',Error=NULL,LeaseOwner=NULL,LeaseUntil=NULL,UpdatedAt=SYSUTCDATETIME()
       OUTPUT inserted.Id WHERE Id=@id AND (Status='Failed' OR (Status='Running' AND

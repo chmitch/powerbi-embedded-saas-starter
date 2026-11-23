@@ -16,6 +16,8 @@ import { Repository } from "./repository.js";
 import { startReconciliation } from "./background.js";
 import { setupSchema, TenantProvisioner } from "./provisioning.js";
 import { capacityDemand, CapacityRecovery } from "./capacity-recovery.js";
+import { CapacityManagement } from "./capacity-management.js";
+import { CapacityPolicy } from "./capacity-policy.js";
 
 const uuid = z.uuid();
 const name = z.string().trim().min(1).max(200);
@@ -29,12 +31,15 @@ const wrap = (fn: (req: Request, res: Response) => Promise<unknown>) =>
 export async function createApp(config: AppConfig) {
   const readyConfig = configured(config);
   const azure = new AzureServices(config);
+  const capacityPolicy = new CapacityPolicy(azure);
+  if (readyConfig) await capacityPolicy.refresh(true);
   const recovery = new CapacityRecovery(azure);
   const db = new Database(azure, recovery);
   const repo = new Repository(db);
   const auth = new AuthService(azure);
   const fabric = new FabricService(repo, azure, recovery);
   const provisioner = new TenantProvisioner(repo, azure, fabric);
+  const capacityManagement = new CapacityManagement(repo, azure, fabric);
   const app = express();
   app.disable("x-powered-by");
   if (isProduction) app.set("trust proxy", 1);
@@ -56,7 +61,12 @@ export async function createApp(config: AppConfig) {
   const webPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "web", "dist");
   app.use(express.static(webPath, { index: false }));
   app.get("/", (_req, res) => res.sendFile(path.join(webPath, "index.html")));
-  app.use((req, _res, next) => capacityDemand.run(req.path.startsWith("/api/") || req.path.startsWith("/auth/"), next));
+  app.use((req, _res, next) => {
+    const foreground = req.path.startsWith("/api/") || req.path.startsWith("/auth/");
+    if (readyConfig && foreground) {
+      void capacityPolicy.refresh().then(() => capacityDemand.run(true, next)).catch(next);
+    } else capacityDemand.run(foreground, next);
+  });
   const sessionKey = readyConfig ? await azure.secret(config.SessionSecretName) : randomBytes(32).toString("base64");
   app.use(session({
     name: "pbi.sid", secret: sessionKey, resave: false, saveUninitialized: false,
@@ -187,6 +197,21 @@ export async function createApp(config: AppConfig) {
   });
   app.get("/api/admin/tenants/:id/settings", wrap(async (req, res) => {
     platform(req); res.json(await provisioner.settings(idParam(req), await auth.operatorToken(req)));
+  }));
+  app.get("/api/admin/tenants/:id/capacity", wrap(async (req, res) => {
+    platform(req);
+    res.json(await capacityManagement.forTenant(idParam(req), await auth.operatorToken(req)));
+  }));
+  app.post("/api/admin/tenants/:id/capacity/resume", wrap(async (req, res) => {
+    platform(req);
+    const input = z.object({ confirmName: z.string().regex(/^[a-z][a-z0-9]{2,62}$/), confirmBilling: z.literal(true) }).strict().parse(req.body);
+    res.status(202).json(await capacityManagement.resumeTenant(idParam(req), await auth.operatorToken(req), input.confirmName, getUser(req)));
+  }));
+  app.post("/api/admin/tenants/:id/remediation/access", wrap(async (req, res) => {
+    platform(req);
+    const input = z.object({ confirmWorkspaceId: uuid, confirmPrincipalId: uuid, confirmAccess: z.literal(true) }).strict().parse(req.body);
+    res.json(await fabric.repairWorkspaceAccess(idParam(req), await auth.operatorToken(req),
+      input.confirmWorkspaceId, input.confirmPrincipalId, getUser(req)));
   }));
   app.post("/api/admin/tenants/:id/setup", wrap(async (req, res) => {
     platform(req);
@@ -414,10 +439,34 @@ export async function createApp(config: AppConfig) {
     return azure.capacity(suffix, method, body);
   }
   app.get("/api/admin/capacities", wrap(async (req, res) => {
-    const result = await arm(req);
-    const managementName = config.ManagementCapacityResourceId.split("/").at(-1);
-    res.json({ ...result, value: Array.isArray(result.value)
-      ? result.value.filter((c: { name?: string }) => !sameId(c.name, managementName)) : result.value });
+    platform(req); res.json(await capacityManagement.list());
+  }));
+  app.get("/api/admin/capacities/tenants", wrap(async (req, res) => {
+    platform(req);
+    res.json(await capacityManagement.inventory(await auth.operatorToken(req)));
+  }));
+  app.get("/api/admin/capacities/auto-resume", wrap(async (req, res) => {
+    platform(req);
+    res.json(await capacityPolicy.refresh(true));
+  }));
+  app.put("/api/admin/capacities/auto-resume", wrap(async (req, res) => {
+    platform(req);
+    const input = z.object({ enabled: z.boolean(), revision: z.uuid().nullable(), confirmBilling: z.boolean().optional() }).strict().parse(req.body);
+    requireCondition(!input.enabled || input.confirmBilling === true, 400, "BillingConfirmationRequired",
+      "Confirm that automatic resume can restart management and authorized tenant capacity billing.");
+    const actor = { Id: getUser(req).Id, TenantId: null };
+    await repo.audit(actor, "CapacityAutoResumePolicy", input.enabled ? "enabled" : "disabled", "Requested");
+    const result = await capacityPolicy.set(input.enabled, input.revision);
+    try { await repo.audit(actor, "CapacityAutoResumePolicy", input.enabled ? "enabled" : "disabled", "Applied"); }
+    catch { throw new AppError(503, "CapacityPolicyAuditUnavailable",
+      "The capacity policy was saved, but its completion audit failed. Refresh the setting before retrying."); }
+    res.json(result);
+  }));
+  app.post("/api/admin/capacities/bulk/action", wrap(async (req, res) => {
+    platform(req);
+    const input = z.object({ action: z.enum(["suspend", "resume"]),
+      confirmNames: z.array(z.string().regex(/^[a-z][a-z0-9]{2,62}$/)).min(1).max(1000) }).strict().parse(req.body);
+    res.status(202).json(await capacityManagement.bulk(await auth.operatorToken(req), input.action, input.confirmNames, getUser(req)));
   }));
   const capacityName = z.string().regex(/^[a-z][a-z0-9]{2,62}$/);
   app.post("/api/admin/capacities", wrap(async (req, res) => {
@@ -430,15 +479,14 @@ export async function createApp(config: AppConfig) {
     res.status(202).json(result);
   }));
   app.post("/api/admin/capacities/:name/action", wrap(async (req, res) => {
+    platform(req);
     const resourceName = capacityName.parse(req.params.name);
     const input = z.object({ action: z.enum(["resume", "suspend", "resize"]), sku: z.string().regex(/^F(2|4|8|16|32|64|128|256|512|1024|2048|4096|8192)$/).optional(),
       confirmName: z.string() }).strict().parse(req.body);
     requireCondition(input.confirmName === resourceName, 400, "ConfirmationRequired", "Confirm the affected capacity name.");
     requireCondition(input.action !== "resize" || input.sku, 400, "MissingSku", "Select a SKU for resizing.");
-    const result = input.action === "resize"
-      ? await arm(req, `/${resourceName}`, "PATCH", { sku: { name: input.sku, tier: "Fabric" } })
-      : await arm(req, `/${resourceName}/${input.action}`, "POST");
-    await repo.audit(getUser(req), `Capacity:${input.action}`, resourceName, "Accepted");
+    const result = await capacityManagement.change(resourceName, input.action, input.sku);
+    await repo.audit(getUser(req), `Capacity:${input.action}`, resourceName, result.status === "accepted" ? "Accepted" : "Skipped");
     res.status(202).json(result);
   }));
   app.delete("/api/admin/capacities/:name", wrap(async (req, res) => {

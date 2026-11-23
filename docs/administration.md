@@ -16,6 +16,7 @@ and day-to-day user, permission and content workflows.
 | Create a tenant or adopt an existing workspace | Yes | No |
 | Create/select customer capacity and assign workspaces | Yes | No |
 | Resize, pause, resume or delete customer capacity | Yes, subject to safeguards | No |
+| Pause/resume all assigned customer capacities | Yes, with explicit scope confirmation and per-capacity results | No |
 | Provision the tenant embedding identity and workspace access | Yes, through the backend setup flow | No |
 | Appoint, replace or revoke tenant administrators | Yes | No; cannot promote users to admin |
 | Register ordinary users and set their application permissions | Not through platform status alone | Yes, for their own tenant |
@@ -35,13 +36,62 @@ It is protected from adoption, customer assignment and in-app capacity mutation.
 The optional automatic-resume policy is a narrow, explicitly enabled exception.
 Customer workspaces remain separate even when they share customer capacity.
 
+## Platform administration screens
+
+| Screen | Purpose |
+| --- | --- |
+| **Fleet Management** | Default overview of all tenants, configuration status, associated capacities and compute states; quick pause/resume, bulk controls, automatic-resume policy, and expandable resource inventory |
+| **Tenant Details** | Edit one tenant's name/capacity/primary admin; manage administrators; see workspace, service-principal and application IDs; review or explicitly refresh configuration checks |
+| **Add Tenant** | Guided new-tenant provisioning with initial admin, capacity/billing choice and optional sample; existing-workspace adoption is an expandable alternative |
+
+Open details from a tenant name or **Open details** in the fleet. Platform
+navigation returns to the fleet or starts Add Tenant without mixing lifecycle
+forms into the overview. Tenant details use a bookmarkable
+`#platform/tenants/<tenant-id>` URL; normal browser back/forward works.
+Creating/adopting a tenant opens its details, where setup progress remains
+available. Leaving that screen does not cancel an accepted setup operation.
+These views do not expose tenant content or change platform authorization.
+
+### Repair failed tenant configuration checks
+
+In **Tenant Details**, select **Check configuration** to inspect saved settings.
+Failed or unknown findings provide targeted controls:
+
+| Finding | Available repair |
+| --- | --- |
+| Capacity assignment/state | Resume a verified paused/suspended customer capacity; select another active capacity or prepare a new replacement in the existing setup form |
+| Runtime access | Restore the configured service principal's workspace Admin role, adding missing membership or updating an existing role |
+| Missing/inaccessible workspace or identity | Review the guided setup and its saved progress/retry controls; reconcile unknown resource-creation outcomes before continuing |
+
+Resume requires confirmation of billing and shared impact, resolves the tenant's
+current capacity server-side, and is available independently of automatic resume.
+Management, unverified and out-of-scope resources cannot be resumed here.
+The browser observes an accepted resume until compute is Active, then refreshes
+readiness; a timeout or failure requires inspection, not automatic resubmission.
+All workspaces sharing the capacity are affected, including unregistered ones.
+
+Replacement controls only prepare/focus the setup form. Review its values and
+select **Save and verify settings** to submit. New compute requires explicit
+billing approval; the old capacity is not deleted. Unsaved name/admin fields
+survive repair and readiness refreshes. Running setup blocks repair writes, and
+ambiguous setup outcomes retain their manual-recovery safeguards.
+
+Access repair requires confirmation of the saved workspace and principal, uses
+the signed-in operator's delegated permissions, and rechecks actual runtime access.
+An already-correct Admin role is not rewritten. Permissions may take time to
+propagate. A generic 403 does **not** prove missing workspace access: expired
+credentials, embedding-group restrictions, Fabric tenant settings, or insufficient
+operator permissions still require the appropriate external administrator.
+These controls do not recreate identities, rotate secrets, change global Fabric
+policy, or grant human users application content permissions.
+
 ## Platform admin: provision a new tenant
 
 ### Decisions the administrator makes
 
-In **Platform admin**, supply:
+In **Platform admin > Add Tenant**, supply:
 
-1. **Workspace name:** the tenant-facing name used for the tenant and its workspace.
+1. **Tenant / workspace name:** the tenant-facing name used for the tenant and its workspace.
 2. **Primary administrator:** an existing user's exact Entra sign-in UPN in the
    configured directory, not an email alias. The backend resolves the immutable
    directory object ID and checks membership before starting resource creation.
@@ -112,7 +162,7 @@ creation itself requires the administrator UPN.
 
 ### Existing tenants, failures and handoff
 
-Existing tenant settings reuse the workspace and service principal; renaming or
+**Tenant Details** settings reuse the workspace and service principal; renaming or
 changing capacity does not recreate content or reset ACLs. Existing-workspace
 adoption is a separate, explicit path requiring verifiable operator workspace
 Admin access. Adoption does not automatically grant application membership,
@@ -124,7 +174,7 @@ process, allow up to 90 seconds for its worker lease to expire. Unknown app/
 workspace creation outcomes require manual reconciliation, not blind recreation.
 Failed/new capacity can continue billing; there is no automatic cloud rollback.
 
-Initial sample seeding is available on **Provision a tenant**, not existing-tenant
+Initial sample seeding is available on **Add Tenant**, not existing-tenant
 platform settings or adoption. A tenant admin can also add it later from their
 own console. Saved import IDs are reused after import polling or
 metadata failures. If upload acceptance is unknown without a saved import ID, or
@@ -136,6 +186,93 @@ have been assigned the application role, and whether content still needs loading
 **Tenant ready does not imply customer content has been loaded or user grants
 have been assigned.** The selected bundled sample is imported and published
 before setup completes; otherwise content onboarding remains a tenant-admin task.
+
+### Operate customer capacities
+
+Open **Platform admin > Fleet Management**. The page
+automatically loads customer ARM resources and verifies tenant associations
+against current workspace assignments. Each tenant row shows its capacity,
+configuration status and pause/resume actions; shared capacity rows identify the
+other tenants affected. Tenants without a workspace or verified managed capacity
+are still listed. Provision new capacity through Add Tenant, or assign a
+different capacity in Tenant Details. The expandable resource inventory contains
+resize/delete controls, including unassigned resources. Resizing changes compute,
+not workspace ownership, content or grants.
+
+| Control | Effect |
+| --- | --- |
+| **Pause** | Suspend that resource's compute; reports in every assigned workspace become unavailable |
+| **Resume** | Start paused/suspended compute and restart billing |
+| **Resize** | Change the resource's F SKU after confirmation of availability/billing impact |
+| **Pause all tenant capacities / Resume all tenant capacities** | Submit confirmed requests to each distinct assigned customer capacity in the configured Azure subscription/resource group |
+| **Delete** | Delete the resource only after registered tenant workspaces have been moved; unmanaged consumers still need manual review |
+
+Bulk operations never target management compute or unassigned capacities.
+Tenants using known capacities outside the configured resource group are shown
+as excluded. If any registered workspace or Fabric-to-ARM mapping cannot be
+verified, bulk actions are disabled until access/mapping issues are resolved.
+Individual ARM controls remain available when tenant discovery is unavailable;
+review all workspace consumers before using them.
+The operator needs Power BI discovery rights; the provisioning identity needs
+ARM capacity-management rights. Application platform status does not grant either.
+
+Confirm the displayed distinct capacity names and affected tenant list. Shared
+capacity is changed once, even when several tenants use it. The backend
+revalidates assignments before each request, skips resources already in the
+requested state, and continues after individual failures. Transitional, failed
+or unsupported resource states block changes. There is no atomic rollback:
+some capacities may change while others fail. An unavailable SQL audit store
+stops further requests rather than allowing unaudited changes.
+
+The results distinguish **accepted/waiting**, **succeeded**, **skipped**,
+**failed** and **unconfirmed**. The browser polls Azure every five seconds for
+up to 15 minutes; accepted does not mean completed. Closing the page stops
+observation, not already submitted Azure work. Bulk submission runs in the
+current backend request, not a durable queue; process interruption or an
+unavailable response can leave a partially submitted batch. Refresh capacity
+states and inspect Azure before explicitly retrying; writes are never
+automatically replayed.
+
+All assigned workspaces are affected, including consumers not registered in
+this portal. Pausing is not a persistent billing prohibition: enabled
+`AutoResumeCapacities` can wake a tenant capacity on later authorized report
+access. Storage/other charges can continue while compute is paused.
+The dedicated management capacity remains protected from these controls.
+
+### Configure automatic capacity resume
+
+**Platform admin > Fleet Management > Automatic capacity resume** displays
+the effective **Enabled/Disabled** status and whether it comes from deployment
+configuration or a saved platform policy. A disabled setting displays an opt-in
+prompt; select **Enable automatic resume** and confirm the billing implications.
+**Disable automatic resume** prevents future automatic starts, but does not pause
+compute or cancel already submitted resumes. Only platform admins can change
+this global application policy; it is not a native Fabric capacity property.
+
+The policy covers both management database recovery on relevant foreground
+connection/read failures and tenant report recovery after authorization and
+assignment revalidation. Reachable anonymous sign-in/session requests can restart
+management F2 billing. It does not grant content access, wake every tenant, run a
+schedule, or permit health/background requests to wake compute.
+
+Changes take effect in the current process after confirmed persistence, without
+restarting the web app. They are stored under `capacity-auto-resume-policy` in the
+application's existing Key Vault, or its external development credential file,
+and override the initial `AutoResumeCapacities` configuration. The runtime reads
+the policy before SQL access and refreshes it on foreground requests at most
+once per minute; **Refresh setting** forces a read. Missing policy uses the
+deployment default. Unreadable, invalid, disabled or expired policy records fail
+closed: automatic resume is disabled, and the UI reports the verification issue.
+The existing runtime reader/provisioning writer identities enforce store access;
+no App Service settings-write permission is added.
+
+Policy changes require application sign-in, platform authority, CSRF protection,
+current revision confirmation, and audit intent/completion. If the setting was
+disabled and management compute is already paused, this SQL-backed console may
+be unreachable. An Azure operator must resume management compute, or enable the
+deployment default when no saved policy overrides it. Do not assume changing
+an environment flag overrides an explicitly saved disabled policy. Unknown save
+outcomes require a refresh before a deliberate retry, not automatic replay.
 
 ## Tenant admin: run the tenant experience
 
@@ -192,6 +329,13 @@ admin can use **Retry sample report** after lease expiry; the saved import ID is
 reused. Unknown/failed imports require manual reconciliation. Failed sample
 addition leaves the tenant's other reports available. Failures in initial
 platform setup must still be resumed by its original platform operator.
+If setup failed before the sample step, but a later setup request completed
+successfully, **Add sample report** becomes available again. The earlier failure
+remains in platform history; it does not count as an imported sample. This
+exception never bypasses an attempted import or an unknown/recovery-required
+outcome.
+The superseded initial request cannot be resumed; use the current tenant
+settings and sample controls rather than replaying its older setup choices.
 
 There are two distinct publication steps: placing artifacts in Fabric, and
 approving their availability in this application.
