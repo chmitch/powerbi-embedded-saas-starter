@@ -19,6 +19,8 @@ import { capacityDemand, CapacityRecovery } from "./capacity-recovery.js";
 import { CapacityManagement } from "./capacity-management.js";
 import { CapacityPolicy } from "./capacity-policy.js";
 import { ReportRenders } from "./report-renders.js";
+import { ReportRequests } from "./report-requests.js";
+import { Insights } from "./insights.js";
 
 const uuid = z.uuid();
 const name = z.string().trim().min(1).max(200);
@@ -75,6 +77,8 @@ export async function createApp(config: AppConfig) {
   });
   const sessionKey = readyConfig ? await azure.secret(config.SessionSecretName) : randomBytes(32).toString("base64");
   const reportRenders = new ReportRenders(repo, sessionKey);
+  const reportRequests = new ReportRequests(repo);
+  const insights = new Insights(db);
   app.use(session({
     name: "pbi.sid", secret: sessionKey, resave: false, saveUninitialized: false,
     store: readyConfig ? new EncryptedSqlSessionStore(db, () => azure.secret(config.SessionSecretName)) : undefined,
@@ -129,6 +133,12 @@ export async function createApp(config: AppConfig) {
     requireCondition(root && (effectivePermissions(user, root.Id, nodes, grants) & permission) === permission,
       403, "Forbidden", "The required tenant permission is not granted.");
   }
+  app.get("/api/admin/insights", wrap(async (req, res) => {
+    res.json(await insights.platform(getUser(req), req.query));
+  }));
+  app.get("/api/tenants/:id/insights", wrap(async (req, res) => {
+    res.json(await insights.tenant(getUser(req), idParam(req), req.query));
+  }));
   app.get("/api/me/content", wrap(async (req, res) => {
     const user = getUser(req);
     const tenantId = tenantMembership(user);
@@ -168,15 +178,36 @@ export async function createApp(config: AppConfig) {
   app.post("/api/embed/report", wrap(async (req, res) => {
     const input = z.object({ contentId: uuid, mode: z.enum(["view", "edit", "copy"]).default("view"),
       recoverCapacity: z.boolean().default(false),
-      render: z.object({ requestedAt: z.string().datetime().max(40), receipt: z.string().max(6000).optional() }).strict().optional(),
+      render: z.object({ requestedAt: z.string().datetime().max(40), receipt: z.string().max(6000).optional(),
+        requestId: uuid.optional() }).strict().optional(),
     }).strict().parse(req.body);
-    const result = await fabric.embed(getUser(req), input.contentId, input.mode, input.recoverCapacity);
+    const user = getUser(req);
+    let requestTracked = false;
+    let requestContext: Awaited<ReturnType<ReportRequests["start"]>> | undefined;
+    let requestTrackingUnavailable = false;
+    if (input.render?.requestId) {
+      try {
+        requestContext = await reportRequests.start(user, input.render.requestId, input.contentId, input.mode,
+          input.render.requestedAt, embedReceivedAt.get(req) ?? new Date());
+        requestTracked = true;
+      } catch { requestTrackingUnavailable = true; console.error(JSON.stringify({ code: "ReportRequestTrackingUnavailable" })); }
+    }
+    async function outcome(status: "Authorized" | "Failed") {
+      if (!requestTracked) return;
+      try { await reportRequests.outcome(user, input.render!.requestId!, status); }
+      catch { requestTrackingUnavailable = true; console.error(JSON.stringify({ code: "ReportRequestTrackingUnavailable" })); }
+    }
+    let result: Awaited<ReturnType<FabricService["embed"]>>;
+    try { result = await fabric.embed(user, input.contentId, input.mode, input.recoverCapacity); }
+    catch (error) { await outcome("Failed"); throw error; }
+    await outcome("Authorized");
     await repo.audit(getUser(req), "EmbedToken", input.contentId, input.mode);
     if (!input.render) { res.json(result); return; }
     try {
       const renderReceipt = await reportRenders.issue(getUser(req), input.contentId, result.id, input.mode,
-        input.render.requestedAt, embedReceivedAt.get(req) ?? new Date(), input.render.receipt);
-      res.json({ ...result, renderReceipt });
+        input.render.requestedAt, requestContext?.receivedAt ?? embedReceivedAt.get(req) ?? new Date(), input.render.receipt,
+        requestTracked ? input.render.requestId : undefined, requestContext?.renderId);
+      res.json({ ...result, renderReceipt, ...(requestTrackingUnavailable ? { requestTrackingUnavailable: true } : {}) });
     } catch {
       console.error(JSON.stringify({ code: "ReportRenderTrackingUnavailable" }));
       res.json({ ...result, renderTrackingUnavailable: true });

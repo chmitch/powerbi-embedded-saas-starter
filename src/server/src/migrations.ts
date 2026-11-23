@@ -106,5 +106,27 @@ export async function migrate(db: Database) {
           INCLUDE(UserId,ContentId,DurationMs,Mode);
         INSERT app.SchemaVersions(Version) VALUES(4);
       END`);
+    await tx.query(`
+      IF NOT EXISTS(SELECT 1 FROM app.SchemaVersions WHERE Version=5)
+      BEGIN
+        CREATE TABLE app.ReportRequests (
+          Id uniqueidentifier NOT NULL PRIMARY KEY,
+          TenantId uniqueidentifier NOT NULL REFERENCES app.Tenants(Id),
+          UserId uniqueidentifier NOT NULL, ContentId uniqueidentifier NOT NULL,
+          ReportName nvarchar(200) NOT NULL, UserDisplayName nvarchar(200) NOT NULL,
+          Mode nvarchar(10) NOT NULL CHECK(Mode IN ('view','edit','copy')),
+          RequestedAt datetime2 NOT NULL, ServerReceivedAt datetime2 NOT NULL,
+          Status nvarchar(20) NOT NULL CHECK(Status IN ('Requested','Authorized','Failed','Rendered')),
+          RenderId uniqueidentifier NOT NULL,
+          RecordedAt datetime2 NOT NULL DEFAULT SYSUTCDATETIME()
+        );
+        CREATE INDEX IX_ReportRequests_Tenant_User_Time ON app.ReportRequests(TenantId,UserId,ServerReceivedAt DESC,Id)
+          INCLUDE(ContentId,ReportName,Mode,Status,RenderId);
+        CREATE INDEX IX_ReportRenders_Tenant_User_Time ON app.ReportRenders(TenantId,UserId,ServerReceivedAt DESC,Id)
+          INCLUDE(ContentId,ReportName,DurationMs,Mode,RequestedAt);
+        CREATE INDEX IX_ReportRenders_Tenant_Report_Time ON app.ReportRenders(TenantId,ContentId,ServerReceivedAt)
+          INCLUDE(DurationMs);
+        INSERT app.SchemaVersions(Version) VALUES(5);
+      END`);
   });
 }

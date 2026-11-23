@@ -12,6 +12,7 @@ import { config } from "../src/config.js";
 import { AuthService } from "../src/auth.js";
 import { FabricService } from "../src/fabric.js";
 import { AppError } from "../src/errors.js";
+import { ReportRequests } from "../src/report-requests.js";
 
 function fixture() {
   const user = { Id: randomUUID(), TenantId: randomUUID(), DirectoryId: randomUUID(), ObjectId: randomUUID(),
@@ -85,7 +86,13 @@ it("rejects forged receipts, other users/tenants, expired receipts and invalid m
 
 it("ties render issuance to successful embed authorization and protects completion with sign-in, CSRF and strict input", async context => {
   const f = fixture();
-  let authorized = false, issues = 0, records = 0, trackingUnavailable = false;
+  let authorized = false, issues = 0, records = 0, trackingUnavailable = false, requestStorageUnavailable = false;
+  const attempts: string[] = [], outcomes: string[] = [];
+  context.mock.method(ReportRequests.prototype, "start", async (_user, id) => {
+    if (requestStorageUnavailable) throw new Error("Request storage unavailable");
+    attempts.push(id); return { renderId: randomUUID(), receivedAt: new Date() };
+  });
+  context.mock.method(ReportRequests.prototype, "outcome", async (_user, _id, status) => { outcomes.push(status); });
   context.mock.method(AuthService.prototype, "callback", async req => {
     req.session.identity = { objectId: f.user.ObjectId, directoryId: f.user.DirectoryId, name: f.user.DisplayName, username: "fixture@example.test" };
   });
@@ -119,13 +126,19 @@ it("ties render issuance to successful embed authorization and protects completi
       headers: csrf ? headers : { Cookie: cookie, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const embed = { contentId: f.report.Id, render: { requestedAt: new Date().toISOString() } };
     assert.equal((await post("/api/embed/report", embed)).status, 403); assert.equal(issues, 0);
+    const tracked = { ...embed, render: { ...embed.render, requestId: randomUUID() } };
+    assert.equal((await post("/api/embed/report", tracked)).status, 403);
+    assert.deepEqual(outcomes, ["Failed"]);
     authorized = true;
     assert.equal((await post("/api/embed/report", { contentId: f.report.Id })).status, 200); assert.equal(issues, 0);
+    assert.equal(attempts.length, 1);
     assert.equal((await post("/api/embed/report", { ...embed,
       render: { requestedAt: `2026-11-23T16:00:00.${"0".repeat(40)}Z` } })).status, 400);
     assert.equal(issues, 0);
     const embedded = await (await post("/api/embed/report", embed)).json() as { renderReceipt: string };
     assert.equal(embedded.renderReceipt, "fixture-receipt"); assert.equal(issues, 1);
+    assert.equal((await post("/api/embed/report", tracked)).status, 200);
+    assert.deepEqual(outcomes, ["Failed", "Authorized"]); assert.equal(attempts.length, 2);
     const completion = { receipt: embedded.renderReceipt, durationMs: 1234 };
     assert.equal((await post("/api/telemetry/report-rendered", completion, false)).status, 403);
     for (const body of [{ ...completion, userId: f.user.Id }, { ...completion, tenantId: f.tenant.Id },
@@ -133,6 +146,12 @@ it("ties render issuance to successful embed authorization and protects completi
       assert.equal((await post("/api/telemetry/report-rendered", body)).status, 400);
     assert.equal(records, 0);
     assert.equal((await post("/api/telemetry/report-rendered", completion)).status, 201); assert.equal(records, 1);
+    requestStorageUnavailable = true;
+    const requestDegraded = await post("/api/embed/report", tracked);
+    assert.equal(requestDegraded.status, 200);
+    const requestConfig = await requestDegraded.json() as { requestTrackingUnavailable: boolean; renderReceipt: string };
+    assert.equal(requestConfig.requestTrackingUnavailable, true); assert.equal(requestConfig.renderReceipt, "fixture-receipt");
+    requestStorageUnavailable = false;
     trackingUnavailable = true;
     const degraded = await post("/api/embed/report", embed);
     assert.equal(degraded.status, 200);

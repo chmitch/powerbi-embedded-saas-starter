@@ -236,11 +236,12 @@ function EmbeddedReport({ ref, selection, report, title, onView, onEdit, onClose
     let capacityResumed = false;
     let instance = 0;
     const measurement = reportRenderMeasurement();
+    const requestId = crypto.randomUUID();
     const request = (mode = tokenMode, recoverCapacity = false, trackRender = false) => "modelId" in selection
       ? api<EmbedConfiguration>("/api/embed/create", "POST", { modelId: selection.modelId, ...(recoverCapacity ? { recoverCapacity } : {}) })
       : api<EmbedConfiguration>("/api/embed/report", "POST", { contentId: selection.contentId, mode,
         ...(recoverCapacity ? { recoverCapacity } : {}),
-        ...(trackRender ? { render: { requestedAt: measurement.requestedAt,
+        ...(trackRender ? { render: { requestedAt: measurement.requestedAt, requestId,
           ...(configuration?.renderReceipt ? { receipt: configuration.renderReceipt } : {}) } } : {}) });
     function schedule(config: EmbedConfiguration) {
       clearTimeout(timer);
@@ -313,7 +314,7 @@ function EmbeddedReport({ ref, selection, report, title, onView, onEdit, onClose
           if (!isCurrent()) return;
           changePhase("ready");
           if (capacityResumed) setNotice("Capacity is running. Report ready.");
-          if (!config.create && (!config.renderReceipt || config.renderTrackingUnavailable))
+          if (!config.create && (!config.renderReceipt || config.renderTrackingUnavailable || config.requestTrackingUnavailable))
             setUsageWarning("Report ready, but usage tracking is unavailable.");
         } });
       current.on("error", event => {

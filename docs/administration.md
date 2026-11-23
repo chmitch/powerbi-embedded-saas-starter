@@ -294,10 +294,44 @@ Failed delivery, abandoned loads or expired sessions can omit records; tracking
 warnings do not prevent consuming the report. Retention/export policy must be
 chosen before using identity history at production scale.
 
-Tenant-admin-only embedded insights/audit reports and onboarding-time packaging
-are planned, not available yet. This change supplies their future data source,
-not a dashboard or direct tenant access to shared SQL. Future models must enforce
-tenant-isolated data and admin-only report access.
+Open **Platform admin > Insights** for total tenants/users/hosted reports,
+per-tenant bar charts and daily render line charts. Select a tenant in a bar
+chart or the daily-view selector to focus its daily usage. Platform insights never expose
+individual user or report usage details.
+
+Open **Tenant admin > Insights** for your tenant's user/report totals and daily
+completed renders. Choose a report for renders by UTC day/hour and daily average
+total render duration as line charts. Choose a user for a most-used-report bar
+chart and paginated request-history table. All other insights use charts rather
+than tables. Point to a line chart or use its keyboard-accessible slider to inspect
+exact values. Days without duration measurements appear as gaps, not zeros.
+Usage visibility does not grant report access. Dual-role users
+must use Tenant Admin for their own tenant's details; platform authority alone
+cannot access them.
+
+These are native application pages reading management SQL through the backend;
+they do not start tenant capacity or embed reports. The management database must
+remain available. The default is the last week (7 days). **Time range** also offers
+rolling month (30 days), quarter (90 days), year (365 days), or **Custom range**.
+Presets end today in UTC and update immediately; use **Apply / refresh** to apply
+custom dates or refresh a preset. Custom ranges accept up to 366 inclusive UTC
+days. User/report counts reflect current metadata, including unpublished
+nondeleted reports. The platform's total users also includes platform-only users.
+These are usage metrics, not Fabric CU consumption or Azure billing.
+
+Migration 5 adds `app.ReportRequests`. Initial requests for known reports are
+recorded before embed authorization, including failed requests. The request
+history distinguishes completed renders, backend embed failures and unconfirmed
+attempts. Unconfirmed does not prove a load failed: it can mean still loading,
+abandoned, client-failed or undelivered completion telemetry. Token renewals and
+in-session Save As authorizations are not new initial requests.
+Tracking cannot capture requests that never reach the authenticated server,
+unknown/foreign reports, or storage failures. Earlier history includes only
+completed renders; failed/abandoned loads cannot be reconstructed retroactively.
+Selectors include historical users/reports and display at most 500 entries;
+historical names may differ from current names. The user bar chart displays up to
+500 most-used reports. History is 50 rows per page, up to 1,001 pages per selected
+range; narrow the range for very high-volume users.
 
 ### Add users
 

@@ -8,6 +8,7 @@ import { PlatformConsole } from "./platform";
 import { TenantSample } from "./tenant-sample";
 import { Reports, type ReportsHandle } from "./reports";
 import { Icon } from "./icons";
+import { InsightsPage } from "./insights";
 import "./style.css";
 
 function PermissionPicker({ value, onChange }: { value: number; onChange: (value: number) => void }) {
@@ -127,6 +128,19 @@ function TenantAdministrators({ tenantId, version, run, busy }: { tenantId: stri
   </section>;
 }
 function TenantManager({ tenantId, version, run, busy }: { tenantId: string; version: number; run: Run; busy: boolean }) {
+  const [screen, setScreen] = useState("manage");
+  return <>
+    <nav className="platform-navigation" aria-label="Tenant administration">
+      <button className={screen === "insights" ? "selected" : ""} aria-current={screen === "insights" ? "page" : undefined}
+        disabled={busy} onClick={() => setScreen("insights")}>Insights</button>
+      <button className={screen === "manage" ? "selected" : ""} aria-current={screen === "manage" ? "page" : undefined}
+        disabled={busy} onClick={() => setScreen("manage")}>Users, content and access</button>
+    </nav>
+    {screen === "insights" ? <InsightsPage key={tenantId} tenantId={tenantId} version={version} /> :
+      <TenantManagement tenantId={tenantId} version={version} run={run} busy={busy} />}
+  </>;
+}
+function TenantManagement({ tenantId, version, run, busy }: { tenantId: string; version: number; run: Run; busy: boolean }) {
   const [data, setData] = useState<ManageData>();
   const [error, setError] = useState("");
   const [identityMode, setIdentityMode] = useState("upn");

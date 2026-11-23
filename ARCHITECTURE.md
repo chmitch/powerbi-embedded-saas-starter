@@ -322,7 +322,7 @@ The tables are:
 
 | Table | Stored state |
 | --- | --- |
-| `SchemaVersions` | Applied migration versions (source defines versions 1-4) |
+| `SchemaVersions` | Applied migration versions (source defines versions 1-5) |
 | `Tenants` | Workspace mapping, embedding-identity references, lifecycle/readiness, primary administrator |
 | `Users` | Stable directory identity, sole tenant, admin flags, root permission defaults |
 | `Content` | Reports/models, external IDs, report-model dependency, publication/deletion/security flags |
@@ -331,12 +331,14 @@ The tables are:
 | `Settings` | Bootstrap completion and verified workspace-capacity bindings |
 | `Audit` | Safe actor/action/resource/outcome records |
 | `ReportRenders` | Completed initial report renders: authenticated identity and report snapshots, request/receipt/completion times and elapsed milliseconds |
+| `ReportRequests` | Authenticated initial known-report request attempts, identity/report snapshots, first client/server timestamps, outcome and stable server-generated render nonce |
 | `Sessions` | Encrypted server-side session and token-cache data with expiry |
 | `ProvisioningOperations` | Idempotent setup/sample requests, progress, checkpoints, lease and outcome |
 
 Migrations run under a SQL application lock. Version 2 preserves existing users
 while allowing platform-only admins; version 3 adds setup operations and primary
-admin metadata; version 4 adds report-render history. Tenant-aware constraints, exclusive workspace/root/content
+admin metadata; version 4 adds report-render history; version 5 adds initial
+request attempts for usage history. Tenant-aware constraints, exclusive workspace/root/content
 indexes, and transactions protect associations. No invitation, external-identity,
 custom-role, outbox, or separate dependency-graph tables are implemented.
 
@@ -347,7 +349,7 @@ backing-item renames; deletions/dependencies are recorded. Invalid/incomplete
 responses do not intentionally become successful empty inventories.
 Embed requests independently recheck live dependencies.
 
-### Report render history and planned administrator insights
+### Report render history and administrator insights
 
 Each open/reload of an existing report records at most one initial successful
 SDK `rendered` event in `app.ReportRenders`, including view/edit/copy modes.
@@ -383,26 +385,70 @@ are retained in these records.
 Completion is a small same-origin keepalive request. Tracking failures do not
 block report interaction and show a warning; abandoned loads, unavailable storage,
 expired sessions or failed delivery can leave no record. There is no durable
-browser queue, automatic write replay or retention job. Apply migration 4 before
+browser queue, automatic write replay or retention job. Apply migration 5 before
 enabling this code in an existing deployment; code-only ZIP publication does not
 apply migrations.
 
-The accepted long-term direction includes platform-admin and tenant-admin
-embedded insight/audit reports, with tenant reports packaged during onboarding.
-These reports, their packaging and admin-only access enforcement are
-**not implemented** here. Future tenant analytical
-models must receive only the owning tenant's data through enforced extraction/
-data-source isolation; do not expose the shared management SQL database to
-tenant principals or rely on report filters for tenant isolation.
+Administrator insights are **native app pages**, not embedded Power BI reports.
+The backend reads management SQL with the runtime identity. It makes no
+workspace inventory, embed-token, customer-capacity or billing API calls.
+Management SQL, application authentication and credential-store availability
+remain prerequisites. Paused customer capacity does not block the pages.
 
-#### Administrator reporting TODOs
+Platform admin > Insights calls `GET /api/admin/insights`. It returns total
+tenants/users/hosted reports, per-tenant users/hosted reports and completed renders,
+and per-tenant daily render counts. Tenant comparisons use bar charts and daily
+usage uses line charts. Queries select only aggregate usage data;
+user/report detail filters are rejected. Total users includes platform-only
+accounts. Tenant counts include all registered users and nondeleted reports,
+including unpublished reports; they are current metadata counts, not a historical
+as-of inventory.
 
-- [ ] Add platform-admin usage, render-performance and audit reports with explicit
-  platform authorization and a separate analytical/embedding path that does not
-  grant access to customer report content.
-- [ ] Add tenant-admin-only usage, render-performance and audit reports with
-  enforced tenant-isolated data and normal report/model authorization; package
-  and deploy them during new tenant onboarding.
+Tenant admin > Insights calls `GET /api/tenants/:id/insights`. The authenticated
+user must have explicit tenant administration and membership in that exact tenant;
+platform authority is never a substitute. Summary includes current user/report
+counts and daily renders. A `reportId` filter returns that report's daily average
+request-to-render duration and renders by UTC day/hour. A `userId` filter returns
+a report-frequency bar chart and newest-first request history (50 rows per page).
+Daily/hourly report usage and daily average durations use line charts; only the
+user request-history view remains a table. Charts have numeric values, UTC axis
+labels and pointer/keyboard data inspection, without another charting dependency.
+Dual-role users may access only their own tenant's details in Tenant Admin;
+Platform Admin stays aggregate-only. Usage visibility grants no content/embed
+permissions, and these pages expose neither SQL credentials nor direct SQL access.
+
+Date ranges are inclusive UTC calendar dates and default to the last 7 days.
+Rolling presets offer week/month/quarter/year (7/30/90/365 days ending today);
+custom ranges support up to 366 days, including leap years. Buckets and history ordering use server request receipt
+time, not potentially skewed client time. Missing daily/hourly buckets display
+zero. Average duration is only over completed renders; missing completions are
+not treated as zero-duration renders, and duration-chart lines break across days
+without completions. User/report selectors include historical
+snapshots in the selected range, preferring current metadata names when present;
+historical names may differ from today's names. Selectors are bounded to 500
+entries with an explicit truncation notice, user bar charts to the top 500 reports,
+and request history to 1,001 pages per range. There is no CU or billing consumption
+measurement in these pages.
+
+New browser sessions send a stable request UUID with initial/recovery embed
+requests, but not renewals or Save As authorization. Before Fabric authorization,
+the backend attempts to insert `app.ReportRequests` for that authenticated
+user's known tenant report, including permission-denied and capacity-failed
+requests. A serializable transaction binds the UUID to tenant/user/content/mode/
+start; recovery reuses its first server receipt time and server-generated render
+nonce. Successful authorization and failures update status; signed render
+completion links the attempt and render row atomically. Repeated authorization
+after a lost response cannot count that tracked attempt twice.
+
+Requested/Authorized attempts without completion remain **unconfirmed**: they
+may be loading, abandoned, client-failed or missing telemetry. Failed means the
+backend embed request failed, not necessarily a failure of Power BI rendering.
+Unknown/foreign report IDs, invalid/unauthenticated requests and requests never
+received by the server are not tracked as report usage. Storage failures remain
+nonblocking and can omit rows. The user log merges older completed-render rows
+without duplicating linked attempts; earlier failed/abandoned requests cannot be
+backfilled. No tenant embedded analytics models or onboarding report packages
+are needed for this design.
 
 Power BI report/model discovery must not depend on unsupported Fabric item events.
 Distributed reconciliation, transactional outbox dispatch, comprehensive inventory

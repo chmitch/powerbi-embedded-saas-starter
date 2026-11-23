@@ -329,9 +329,21 @@ For every embed-configuration request, the backend must:
   new-report editor readiness. Bind receipts to backend-authorized user/tenant/
   report/workspace context, authenticate and CSRF-protect completion, and make
   storage idempotent. Do not persist tokens/report data or let tracking failures
-  block report consumption. Schema migration 4 is required for render storage.
-  Future admin insight reports require isolated tenant data and explicit admin
-  access; their onboarding packaging is still deferred.
+  block report consumption. Schema migration 5 adds initial request attempts
+  before Fabric authorization; recovery must preserve the first server timestamp
+  and server-generated render nonce. Link completion atomically; do not count
+  token renewals/Save As as new attempts or treat unconfirmed loads as failed.
+- Insights are native metadata-backed pages, not embedded admin reports.
+  Platform APIs select aggregate tenant counts/daily renders only, never
+  user/report usage details. Tenant insight queries require explicit admin role
+  and matching membership and scope every metadata/telemetry read to that tenant.
+  Dual-role users get own-tenant details only through Tenant Admin. Do not query
+  Fabric/ARM or start tenant capacity to serve insights. Management SQL availability
+  remains required; usage telemetry does not measure CU/billing consumption.
+  Use bar/line charts for summaries and performance; keep only user request
+  history as a table. Default to a rolling UTC week, offer 7/30/90/365-day presets
+  and custom inclusive ranges up to 366 days. Zero-fill render counts, but leave
+  gaps for missing duration averages; never imply missing measurements are zero.
 - Platform administration has separate Fleet Management, Tenant Details and
   Add Tenant screens. `platform.tsx` owns hash navigation; `tenant-details.tsx`
   owns the existing guided setup/admin/readiness workflow. Fleet lists every

@@ -55,6 +55,7 @@ export interface EmbedConfiguration {
   targetWorkspaceId?: string;
   autoResumeCapacities?: boolean; capacityResumed?: boolean;
   renderReceipt?: string; renderTrackingUnavailable?: boolean;
+  requestTrackingUnavailable?: boolean;
 }
 export const permissions = { ViewReport: 1, EditReport: 2, CreateReport: 4, CopyReport: 8,
   UseSemanticModelForAuthoring: 16, ManageContent: 32, ManageNavigation: 64 };

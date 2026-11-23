@@ -11,6 +11,7 @@ const contextSchema = z.object({
   contentId: z.uuid(), reportId: z.uuid(), reportName: z.string().max(200), workspaceId: z.uuid(),
   mode: z.enum(["view", "edit", "copy"]), requestedAt: z.string().datetime().max(40),
   serverReceivedAt: z.string().datetime(), issuedAt: z.string().datetime(),
+  requestId: z.uuid().optional(),
 }).strict();
 type RenderContext = z.infer<typeof contextSchema>;
 
@@ -39,7 +40,7 @@ export class ReportRenders {
   }
 
   async issue(user: User, contentId: string, reportId: string, mode: "view" | "edit" | "copy",
-    requestedAt: string, serverReceivedAt: Date, previous?: string) {
+    requestedAt: string, serverReceivedAt: Date, previous?: string, requestId?: string, renderId?: string) {
     const tenantId = tenantMembership(user);
     const tenant = await this.repo.tenant(tenantId);
     const report = (await this.repo.content(tenantId)).find(item =>
@@ -48,17 +49,19 @@ export class ReportRenders {
     if (previous) {
       const context = this.verify(previous, user);
       requireCondition(sameId(context.contentId, contentId) && sameId(context.reportId, reportId) &&
-        sameId(context.workspaceId, tenant.WorkspaceId) && context.mode === mode && context.requestedAt === requestedAt,
+        sameId(context.workspaceId, tenant.WorkspaceId) && context.mode === mode && context.requestedAt === requestedAt &&
+        context.requestId === requestId && (!renderId || sameId(context.id, renderId)),
       409, "RenderContextChanged", "The original render context changed.");
       return previous;
     }
     requireCondition(Math.abs(Date.parse(requestedAt) - serverReceivedAt.getTime()) <= day,
       400, "InvalidRenderTime", "The client request timestamp is outside the supported clock range.");
     const context = contextSchema.parse({
-      version: 1, id: randomUUID(), tenantId, userId: user.Id, directoryId: user.DirectoryId,
+      version: 1, id: renderId ?? randomUUID(), tenantId, userId: user.Id, directoryId: user.DirectoryId,
       objectId: user.ObjectId, displayName: user.DisplayName, contentId, reportId, reportName: report.Name,
       workspaceId: tenant.WorkspaceId, mode, requestedAt, serverReceivedAt: serverReceivedAt.toISOString(),
       issuedAt: this.now().toISOString(),
+      ...(requestId ? { requestId } : {}),
     });
     const payload = Buffer.from(JSON.stringify(context)).toString("base64url");
     return `${payload}.${this.signature(payload).toString("base64url")}`;
@@ -87,6 +90,10 @@ export class ReportRenders {
         requestedAt: new Date(context.requestedAt), serverReceivedAt: new Date(context.serverReceivedAt),
         renderedAt: new Date(Date.parse(context.requestedAt) + durationMs), durationMs,
       });
+      if (context.requestId) await tx.query(`UPDATE app.ReportRequests SET Status='Rendered',RenderId=@renderId
+        WHERE Id=@requestId AND TenantId=@tenantId AND UserId=@userId AND ContentId=@contentId`,
+      { requestId: context.requestId, tenantId: context.tenantId, userId: context.userId,
+        contentId: context.contentId, renderId: context.id });
       return { recorded: true, duplicate: false };
     });
   }

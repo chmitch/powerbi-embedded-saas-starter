@@ -21,7 +21,12 @@ The application supports:
   users belong to exactly one application tenant.
 - Initial report render history: authenticated user/tenant/report, request
   timestamp and request-to-first-render duration, including capacity startup.
-  See [render history and future admin insights](ARCHITECTURE.md#report-render-history-and-planned-administrator-insights).
+  See [render history and administrator insights](ARCHITECTURE.md#report-render-history-and-administrator-insights).
+- Metadata-backed Platform admin and Tenant admin insights pages. Platform
+  insights show only tenant aggregates; tenant administrators can inspect their
+  own users' request history and report performance without starting tenant capacity.
+  Usage/performance use bar and line charts with rolling week/month/quarter/year
+  presets and custom dates; only individual user request history remains a table.
 
 [Setup](#setup) | [Azure deployment](#deploy-to-azure) |
 [Tenant onboarding](#first-sign-in-and-tenant-onboarding) |
@@ -476,12 +481,13 @@ before publishing. No repository license has been selected.
 
 ## Known limitations
 
-Render history requires schema migration 4. Apply migrations before publishing
-this update to an existing database; application-only ZIP deployment does not
-migrate SQL. Tracking is client-reported and best-effort, not a billing-grade
-view counter. Platform-admin and tenant-admin embedded analytics reports remain
-planned, as does automatic tenant-report packaging during onboarding.
-See the [administrator reporting TODOs](ARCHITECTURE.md#administrator-reporting-todos).
+Administrator insights and initial request-attempt tracking require schema
+migration 5 (render history was added in migration 4). Apply migrations before
+publishing this update; application-only ZIP deployment does not migrate SQL.
+Tracking is best-effort and durations are client-reported, not billing-grade.
+Failed/abandoned attempts before request tracking was enabled cannot be recovered.
+Insights depend on management SQL availability, not tenant capacity. These are
+native app pages, not embedded reports or Fabric CU/billing consumption analytics.
 
 General-purpose portal PBIX/model upload (apart from the fixed bundled
 sample), effective-identity RLS, paginated/composite models,

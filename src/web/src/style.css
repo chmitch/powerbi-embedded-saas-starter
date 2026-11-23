@@ -59,6 +59,36 @@ tbody tr:hover { background: #fbfcff; }
 .platform-navigation { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; margin: .7rem 0 1rem; }
 .platform-navigation > span { padding: .45rem .75rem; color: var(--muted); font-weight: 600; }
 .tenant-link { color: var(--accent); padding: 0; justify-content: flex-start; text-align: left; }
+.insights-page { min-width: 0; }
+.insight-metrics { display: flex; flex-wrap: wrap; gap: 1rem; }
+.insight-metrics > div { flex: 1 1 10rem; border: 1px solid var(--line); border-radius: .6rem; padding: 1rem; background: var(--canvas); }
+.insight-metrics dt { color: var(--muted); }
+.insight-metrics dd { margin: .25rem 0 0; font-size: 1.8rem; font-weight: 650; }
+.insight-scroll { max-width: 100%; max-height: 32rem; overflow: auto; margin: 1rem 0; }
+.insight-scroll table { margin-top: 0; }
+.insight-scroll caption { text-align: left; font-weight: 600; padding: .6rem 0; }
+.insight-scroll thead { position: sticky; top: 0; z-index: 1; background: var(--surface); }
+.insight-chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); gap: 1rem; }
+.insight-chart { margin: 1rem 0; min-width: 0; }
+.insight-chart figcaption { font-weight: 650; font-size: 1rem; }
+.insight-bars { max-height: 28rem; overflow: auto; padding: .4rem; }
+.insight-bar-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(3rem, auto); align-items: center; gap: .75rem; padding: .6rem 0; }
+.insight-bar-row.selected { background: var(--accent-soft); }
+.insight-bar-label { min-width: 0; overflow-wrap: anywhere; }
+.insight-bar-label button { justify-content: flex-start; text-align: left; color: var(--accent); padding: .2rem; max-width: 100%; }
+.insight-bar-track { height: 1.15rem; background: var(--canvas); border-radius: .2rem; overflow: hidden; }
+.insight-bar-track > div { height: 100%; background: var(--accent); border-radius: .2rem; }
+.insight-bar-value { font-variant-numeric: tabular-nums; text-align: right; }
+.insight-line-host { width: 100%; min-width: 0; }
+.insight-line-host svg { display: block; overflow: visible; }
+.insight-line-host text { fill: var(--muted); font: 11px "Segoe UI", sans-serif; }
+.insight-gridline { stroke: var(--line); stroke-width: 1; }
+.insight-line { stroke: var(--accent); stroke-width: 2; fill: none; stroke-linejoin: round; }
+.insight-point { fill: var(--accent); stroke: var(--surface); stroke-width: 1; }
+.insight-cursor { stroke: var(--muted); stroke-dasharray: 3 4; opacity: .6; }
+.insight-chart input.insight-chart-slider { width: 100%; min-width: 0; padding: 0; accent-color: var(--accent); box-shadow: none; }
+.insight-chart-value { display: block; min-height: 1.5rem; font-variant-numeric: tabular-nums; }
+.insight-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 small { display: block; color: var(--muted); font-size: .85rem; }
 .error, .notice { padding: .8rem 1rem; border-radius: .6rem; margin-bottom: 1rem; }
 .error { background: #fff0ef; border: 1px solid #f1b5b1; color: #8e221a; }

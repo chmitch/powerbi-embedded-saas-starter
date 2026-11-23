@@ -6,6 +6,7 @@ it("opens bookmarkable tenant details and Add Tenant without turning unknown nav
   const id = "11111111-1111-4111-8111-111111111111";
   assert.deepEqual(platformRoute(`#platform/tenants/${id}`), { screen: "details", tenantId: id });
   assert.deepEqual(platformRoute("#platform/add-tenant"), { screen: "add" });
+  assert.deepEqual(platformRoute("#platform/insights"), { screen: "insights" });
   for (const hash of ["", "#platform/fleet", "#platform/tenants/not-a-tenant", "#platform/tenants/../../admin",
     `#platform/tenants/${id}/content`, "#platform/tenants/https://example.test"])
     assert.deepEqual(platformRoute(hash), { screen: "fleet" });
