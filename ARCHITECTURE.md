@@ -1,8 +1,10 @@
 # Power BI Embedded SaaS Starter: Architecture
 
 This document describes what the tenant portal does, how its components and
-security boundaries work, and how to deploy and operate it. The
-[README](README.md) provides the full setup instructions.
+security boundaries work, and the reasons for the selected design. The
+[README](README.md) provides setup instructions,
+[development guide](docs/development.md) maps contributor workflows, and
+[operations guide](docs/operations.md) covers existing-environment updates.
 
 ## Solution overview
 
@@ -130,21 +132,30 @@ procedures are described in the corresponding sections below.
 | Key Vault + enforced NSP | Production secrets stay in Azure, with managed identity/RBAC and explicit app egress rules; no unprotected-public fallback |
 | Dedicated tenant principals | Each tenant principal is granted only its assigned workspace; profiles/federated credentials are not implemented |
 | Shared navigation with inherited grants | One canonical security parent per item; aliases do not change Power BI artifact names |
+| Native administrator insights | Read management SQL without depending on customer compute; platform usage stays aggregate-only, tenant detail stays own-tenant |
 
 ## Code and component map
 
 | Component | Canonical implementation |
 | --- | --- |
 | HTTP routes, sessions, bootstrap and admin boundaries | `src\server\src\app.ts` |
-| Entra authorization-code flow and encrypted session store | `auth.ts` |
-| Azure identities, credential access, Graph and ARM calls | `azure.ts`, `local-secrets.ts`, `deployment-secrets.ts` |
-| Tenant/item authorization and token shape | `domain.ts`, `fabric.ts` |
-| Versioned SQL and repository operations | `db.ts`, `migrations.ts`, `repository.ts` |
-| Guided setup with SQL checkpoints/leases | `provisioning.ts` |
-| Fixed demo PBIX asset and tenant-scoped import | `sample.ts`, `fabric.ts`, `samples\Store Sales.pbix` |
-| In-process reconciliation and failure-driven recovery | `background.ts`, `capacity-recovery.ts` |
+| Entra authorization-code flow and encrypted session store | `src\server\src\auth.ts` |
+| Configuration, Azure identities, credential access, Graph and ARM calls | `src\server\src\config.ts`, `azure.ts`, `local-secrets.ts`, `deployment-secrets.ts` |
+| Tenant/item authorization and token shape | `src\server\src\domain.ts`, `fabric.ts` |
+| Versioned SQL and repository operations | `src\server\src\db.ts`, `migrations.ts`, `repository.ts` |
+| Guided setup with SQL checkpoints/leases | `src\server\src\provisioning.ts` |
+| Fixed demo PBIX asset and tenant-scoped import | `src\server\src\sample.ts`, `fabric.ts`, `samples\Store Sales.pbix` |
+| In-process reconciliation and failure-driven recovery | `src\server\src\background.ts`, `capacity-recovery.ts` |
+| Scoped ARM inventory, capacity changes and billing opt-in | `src\server\src\capacity-management.ts`, `capacity-policy.ts` |
+| Initial request/render tracking and SQL insight queries | `src\server\src\report-requests.ts`, `report-renders.ts`, `insights.ts` |
 | Report viewer/authoring and lifecycle guards | `src\web\src\reports.tsx`, `embedding.ts` |
-| Platform and own-tenant admin UI | `platform.tsx`, `main.tsx` |
+| Platform routing, fleet/details and capacity controls | `src\web\src\platform.tsx`, `platform-route.ts`, `tenant-details.tsx`, `capacity-manager.tsx` |
+| Own-tenant administration and application shell | `src\web\src\main.tsx` |
+| Native insight pages, DTOs and dependency-free charts | `src\web\src\insights.tsx`, `insight-types.ts`, `insight-charts.tsx`, `insight-chart-data.ts` |
+
+Within a row, abbreviated filenames share the first module's directory unless
+an explicit path is shown. See the [development guide](docs/development.md)
+for test selection and local workflows.
 
 ## Authentication and service identities
 
@@ -685,44 +696,21 @@ The maintained entry point is `scripts\Deploy.ps1`. Local development uses
 `Initialize-FabricDatabase.ps1`. Commands and prerequisite grants are in the README.
 All use externally stored configuration; `Common.ps1` owns naming and guards.
 
-### Prerequisites and deployment command
+### Provisioning versus application-only updates
 
-Use PowerShell 7, Node.js 22 LTS/npm, and Azure CLI from the repository root.
-The deployment operator needs an authenticated Entra workforce account with
-Azure resource/provider, custom-role/role-assignment, Entra app-registration,
-and Fabric capacity/workspace/SQL provisioning permissions. An authorized Entra
-administrator must grant the required Graph application permissions and delegated
-Power BI consent. Fabric tenant settings must allow the intended service
-principals to use APIs and embed content.
+The [README prerequisites](README.md#prerequisites) and
+[Azure deployment workflow](README.md#deploy-to-azure) are the canonical commands
+for new-environment provisioning or explicitly approved infrastructure changes.
+Graph/Power BI grant switches require an already authorized operator; they do
+not elevate permissions. Reuse pinned configuration/namespace for reruns.
 
-For a new environment, select a unique namespace and an external configuration
-path. Deployment creates billable B1/F2 resources; local initialization is not
-required first.
-
-```powershell
-az login --tenant "<directory-id>"
-az account set --subscription "<subscription-id>"
-
-$deployment = @{
-    NamePrefix = 'demoweb'
-    Location = 'westus3'
-    ManagementCapacitySku = 'F2'
-    AppServiceSku = 'B1'
-    ConfigurationPath = Join-Path $env:LOCALAPPDATA 'PBIEmbeddedAOD\demoweb-pbiembedded\configuration.json'
-}
-
-# Add ServicePrincipalGroupId if Fabric tenant settings require an existing group.
-.\scripts\Deploy.ps1 @deployment -WhatIf
-
-# After approving the resources, permissions, and costs:
-.\scripts\Deploy.ps1 @deployment -GrantGraphPermissions -GrantAdminConsent -Confirm:$false
-```
-
-The grant switches require an already authorized operator; they do not elevate
-permissions. Reuse the same configuration path and namespace for reruns.
-See [setup prerequisites](README.md#prerequisites) and
-[Azure deployment](README.md#deploy-to-azure) for group configuration, health
-checks, failure handling and costs. After deployment, follow
+Routine application updates follow the
+[operations runbook](docs/operations.md#application-only-zip-update). Package and
+publish compiled code plus locked Linux dependencies without changing resources,
+grants, cloud settings, startup, runtime, health configuration or Always On.
+Required SQL migrations are an explicit prior step, not part of ZIP publication.
+Do not overwrite intentional cloud/local differences such as origin or identity.
+After initial deployment, follow
 [first sign-in and tenant onboarding](README.md#first-sign-in-and-tenant-onboarding)
 to bootstrap platform administration and provision customer tenants.
 
@@ -816,29 +804,53 @@ Purge-protected vault names remain retained for seven days.
 
 ## Limitations and future work
 
-The single-instance design has no high-availability guarantee or durable job
-queue. Operational extensions include centralized telemetry, rate limiting,
-automated dependency/secret scanning, backup/restore procedures, complete
-offboarding/retention, explicit production credential rotation, and an
-unattended deployment identity/workflow.
+This is the durable scope record, not an implementation queue or blanket
+authorization. Requested future work, possible enhancements and unresolved policy
+choices are different; record new accepted decisions here when scope changes.
 
-**Deferred features:** general-purpose portal PBIX/model upload (beyond the fixed
-bundled sample; future `ManageContent`-authorized
-tenant-scoped backend import and reconciliation), effective-identity RLS,
-paginated/chained/composite models, consumer/federated identity and deliberate
-account linking, invitations, configurable role bundles, access-diff preview,
-distributed workers/reconciliation/outbox and safe scale-out initialization.
+### Requested but deferred
 
-**Out of scope:** model data-source connectivity/credentials, gateways, and
-Fabric/model VNet design. Assume working semantic-model connections.
-Do not silently expand this initial release into those areas.
+| Capability | Required boundary when implemented |
+| --- | --- |
+| General-purpose portal PBIX upload | Authorize effective `ManageContent`, not tenant-admin status solely for upload; backend import into the authenticated tenant workspace with existing registration/publication/security checks. The fixed bundled sample is implemented, not general upload. |
+| Effective-username RLS | Resolve trusted user/model identity and roles server-side, including renewals; unsupported required identity currently fails closed. |
+| Consumer/third-party federated sign-in | Preserve internal membership/authorization and deliberate account linking; do not merge identities solely by email. Workforce Entra sign-in is the implemented path. |
 
-Other open decisions are capacity pooling/service levels, export/direct-service
-access policy, revocation latency, bootstrap recovery, group-derived adoption,
-readiness freshness, supported upload formats, publication/versioning workflows,
-and synchronization scale/throttling strategy. Recheck licensing/SKU eligibility:
-App Owns Data consumers and direct human Fabric publishing have different
-licensing requirements.
+The earlier idea of packaged embedded administrator reports is superseded by
+native metadata-backed insights. It is not outstanding onboarding/report-package
+work. Tenant compute independence and aggregate-only platform access remain
+accepted requirements.
+
+### Possible extensions and operational gaps
+
+General semantic-model deployment beyond PBIX import, paginated/chained/composite
+models, invitations, configurable role bundles, access-diff preview and richer
+publication/versioning are not implemented; exact scope requires a new decision.
+Service-principal profiles require API-support evaluation rather than assuming
+Fabric REST supports them. Managed identity/federation for tenant credentials is
+an extension, not the current dedicated-principal secret implementation.
+
+The single-instance design has no HA guarantee, durable job queue, distributed
+worker/reconciliation/outbox or scale-out initialization lock. Central telemetry
+(Application Insights/Azure Monitor), Fabric capacity metrics, rate limiting,
+automated dependency/secret scanning, backup/restore, full offboarding/retention,
+production credential rotation and unattended CI/CD remain operational gaps.
+The operations runbook does not claim these are implemented.
+
+### Unresolved decisions
+
+Capacity pooling/service levels, export/direct-service access policy, acceptable
+revocation latency, bootstrap recovery, group-derived adoption, readiness freshness,
+supported upload formats, publication/versioning workflows, and synchronization
+scale/throttling strategy require explicit decisions. Recheck licensing/SKU
+eligibility: App Owns Data consumers and direct human Fabric publishing have
+different licensing requirements.
+
+### Explicitly out of scope
+
+Model data-source connectivity/credentials, gateways, and Fabric/model VNet
+design/automation. Assume working semantic-model connections. Do not expand the
+initial release into these areas without an explicit request.
 
 ## Microsoft references
 

@@ -31,7 +31,9 @@ The application supports:
 [Setup](#setup) | [Azure deployment](#deploy-to-azure) |
 [Tenant onboarding](#first-sign-in-and-tenant-onboarding) |
 [Administrator guide](docs/administration.md) |
-[Architecture and limitations](ARCHITECTURE.md)
+[Architecture and limitations](ARCHITECTURE.md) |
+[Development guide](docs/development.md) |
+[Existing-environment operations](docs/operations.md)
 
 ## Architecture at a glance
 
@@ -146,6 +148,12 @@ Omitting that switch selects Key Vault instead, which requires separately
 approved local networking/RBAC; a role assignment does not bypass network rules.
 
 ## Deploy to Azure
+
+This section provisions a new environment or explicitly updates infrastructure.
+For a routine code update to an existing app, use the
+[application-only ZIP runbook](docs/operations.md#application-only-zip-update)
+instead. It preserves existing cloud settings/grants and checks required SQL
+migrations before publication.
 
 Deployment uses a separate environment and Key Vault, not a local-file credential
 configuration. Do **not** run local initialization first for this environment.
@@ -417,22 +425,20 @@ editors are not replayed. See the [recovery design](ARCHITECTURE.md#capacity-rec
 
 ## Development and validation
 
+Start with the [development guide](docs/development.md) for source/test navigation,
+local workflow, dependency handling and task-specific validation.
+
 ```powershell
-npm ci
 npm run check
 npm test
 npm run build
 .\scripts\Test-Scripts.ps1
-node .\scripts\Export-Architecture.mjs
 ```
 
-The PowerShell suite checks parsing, dry runs, mocked clean/repeat deployment,
-packaging, secret-store boundaries, consent/NSP failures, and health gates without
-Azure requests. Backend tests use fixtures/mocks.
-There is no configured linter or CI workflow yet.
-`npm run dev` watches backend TypeScript; rebuild changed frontend code with
-`npm run build --workspace @pbi/web`. Set `PBIEMBEDDED_CONFIG` to your external
-configuration before running npm startup/migration commands directly.
+Restore with `npm ci` on a fresh checkout, after dependency changes or when a
+validation command reports missing packages. Backend and PowerShell tests use
+fixtures/mocks, not live Azure provisioning. There is no configured linter or CI
+workflow. The development guide explains focused tests and browser verification.
 
 | Path | Contents |
 | --- | --- |
@@ -441,49 +447,20 @@ configuration before running npm startup/migration commands directly.
 | `src\web\src` | React report experience and separate admin consoles |
 | `scripts` | Local setup, Azure deployment, mocked regressions and diagram generation |
 | `samples` | Bundled demo PBIX for optional initial setup or tenant-admin sample addition |
-| `docs` | Generated SVGs/editable draw.io diagram and icon attribution |
-| `.github\copilot-instructions.md` | Contributor guardrails and design-maintenance rules |
+| `docs` | Development/operations/admin guides, architecture diagrams and icon attribution |
+| `.github\copilot-instructions.md` | Compact mandatory guardrails and task-based reading map |
 
-### Node packages and source control
-
-Commit the root `package.json`, both workspace manifests
-(`src\server\package.json` and `src\web\package.json`), and the root
-`package-lock.json`. The manifests declare direct dependencies and scripts; the
-lockfile records exact resolved versions, integrity hashes and transitive
-dependencies. After cloning, run `npm ci` from the repository root to restore
-the locked dependency tree for both workspaces.
-
-Do **not** commit `node_modules` or compiled `dist` directories; `.gitignore`
-already excludes them at every directory level. Dependencies of dependencies
-are managed by npm, not copied into source control or removed individually.
-Azure deployment restores production packages for Linux separately from the
-development/build tools; ignoring local modules does not omit runtime
-dependencies from the deployment artifact.
-
-| Scope | Packages | Purpose |
-| --- | --- | --- |
-| Backend runtime | `@azure/identity`, `@azure/keyvault-secrets`, `@azure/msal-node` | Azure credentials, Key Vault secrets and Entra authentication |
-| Backend runtime | `express`, `express-session`, `helmet`, `zod` | HTTP APIs, server-side sessions, security headers and input/configuration validation |
-| Backend runtime | `mssql` | Transactional Fabric SQL access |
-| Frontend runtime | `react`, `react-dom`, `powerbi-client` | Portal UI, browser rendering and Power BI embedding SDK |
-| Development/build | `typescript`, `tsx`, `vite` | Type checking/compilation, TypeScript watch/test/migration commands and frontend bundling |
-| Test | `powerbi-models` | Power BI embedding configuration validation in contract tests |
-| Type definitions | `@types/express`, `@types/express-session`, `@types/mssql`, `@types/node`, `@types/react`, `@types/react-dom` | Compile-time types for the application and its libraries |
-
-Use the manifests/lockfile for version information and `npm ls --depth=0` to
-inspect installed direct dependencies. When dependencies change, update the
-owning workspace manifest and root lockfile together.
-
-Keep source/tests/scripts and generated architecture diagrams in the initial check-in.
-Never add real configuration, secrets, tokens, private keys, or cloud logs, even
-to ignored files. Inspect the staged diff and run an approved secret scanner
-before publishing. No repository license has been selected.
+Keep workspace manifests/root lockfile together; do not commit modules, compiled
+assets, real configuration, credentials or cloud logs. See
+[dependency and generated-asset guidance](docs/development.md#dependencies-and-generated-assets).
+No repository license has been selected.
 
 ## Known limitations
 
 Administrator insights and initial request-attempt tracking require schema
 migration 5 (render history was added in migration 4). Apply migrations before
-publishing this update; application-only ZIP deployment does not migrate SQL.
+publishing incompatible code; application-only ZIP deployment does not migrate SQL.
+See the [explicit migration procedure](docs/operations.md#explicit-database-migration).
 Tracking is best-effort and durations are client-reported, not billing-grade.
 Failed/abandoned attempts before request tracking was enabled cannot be recovered.
 Insights depend on management SQL availability, not tenant capacity. These are

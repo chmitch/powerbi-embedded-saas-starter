@@ -7,7 +7,8 @@ permissions. This guide explains tenant provisioning, administrator appointments
 and day-to-day user, permission and content workflows.
 
 [Setup and deployment](../README.md#setup) |
-[Architecture and authorization](../ARCHITECTURE.md#tenant-isolation-and-authorization)
+[Architecture and authorization](../ARCHITECTURE.md#tenant-isolation-and-authorization) |
+[Application updates and operating recovery](operations.md)
 
 ## Who owns what?
 
