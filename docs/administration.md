@@ -19,7 +19,8 @@ and day-to-day user, permission and content workflows.
 | Resize, pause, resume or delete customer capacity | Yes, subject to safeguards | No |
 | Pause/resume all assigned customer capacities | Yes, with explicit scope confirmation and per-capacity results | No |
 | Provision the tenant embedding identity and workspace access | Yes, through the backend setup flow | No |
-| Appoint, replace or revoke tenant administrators | Yes | No; cannot promote users to admin |
+| Appoint/replace primary admin or revoke any admin | Yes | No |
+| Appoint additional tenant administrators | Yes | Yes, already registered own-tenant users only |
 | Register ordinary users and set their application permissions | Not through platform status alone | Yes, for their own tenant |
 | Synchronize, review and publish tenant content | Not through platform status alone | Yes, for their own tenant |
 | Add the fixed bundled sample report/model | Optional during new-tenant creation | Yes, later in their ready tenant |
@@ -125,6 +126,7 @@ Identity preparation precedes capacity/workspace creation in the current flow.
 | 7. Appoint the tenant admin | Register/attach the selected human identity, set its tenant-admin flag and primary-admin metadata, and grant the new tenant's initial permission defaults | A person responsible for administering the tenant in this application |
 | 8. Verify runtime readiness | Verify the workspace/name/capacity and access with the actual tenant embedding principal | Runtime access established before optional sample import |
 | 9. Include sample, if selected | Import `samples\Store Sales.pbix` using the tenant principal, wait for the import, synchronize inventory/navigation, and publish only its report/model | Sample metadata in application SQL and a published report available through normal user permissions; setup completes afterward |
+| 10. Configure analytics, if enabled | Bind the existing principal to this tenant, add analytics-reader group membership and confirm Contributor in the isolated agent workspace | Analytics access grants; real endpoint isolation verification is still required |
 
 The human tenant administrator and the tenant service principal are **different
 identities**. Step 5 grants the service principal a Fabric workspace role; step 7
@@ -137,7 +139,7 @@ seeding does not grant platform admins tenant content access.
 
 ### Appointing and changing tenant administrators
 
-Only a platform admin can make these appointments:
+Platform administrators use Tenant Details for these appointments:
 
 - The initial admin is selected during guided creation. For a **new tenant**,
   this user receives all seven current root permission flags, in addition to
@@ -160,6 +162,15 @@ The same user cannot be assigned across multiple application tenants. Creating a
 second tenant is not an implicit user-transfer operation. Additional-admin manual
 ID entry is available when directory lookup is unavailable; guided new-tenant
 creation itself requires the administrator UPN.
+
+An existing tenant administrator can also open **Tenant users** and select
+**Appoint administrator** for a user already registered in that same tenant.
+Confirmation grants tenant administration, not report/model permissions, platform
+status or a primary-admin replacement. Primary replacement and revocation remain
+platform operations. The backend reloads the actor's current role and tenant
+on each request and rechecks the appointment inside its transaction.
+Changing human administrators does not change the tenant service principal,
+its group memberships or the SQL RLS policy.
 
 ### Existing tenants, failures and handoff
 
@@ -310,9 +321,13 @@ Usage visibility does not grant report access. Dual-role users
 must use Tenant Admin for their own tenant's details; platform authority alone
 cannot access them.
 
-These are native application pages reading management SQL through the backend;
-they do not start tenant capacity or embed reports. The management database must
-remain available. The default is the last week (7 days). **Time range** also offers
+These are native application pages; they do not start tenant capacity or embed
+reports. Platform aggregates read transactional management SQL. Tenant details
+use your tenant's service principal on the SQL analytics endpoint, where database
+RLS restricts rows. Mirrored inventory and telemetry can lag recent changes.
+Analytics must be configured and available; failures never fall back to shared
+transactional queries. The management database must also remain available for
+sign-in and authorization. The default is the last week (7 days). **Time range** also offers
 rolling month (30 days), quarter (90 days), year (365 days), or **Custom range**.
 Presets end today in UTC and update immediately; use **Apply / refresh** to apply
 custom dates or refresh a preset. Custom ranges accept up to 366 inclusive UTC
@@ -344,7 +359,8 @@ This adds an **application membership**, not a new Entra account, guest invitati
 or Fabric workspace user. The user must already exist in the configured directory
 and cannot be registered into a second tenant. Membership alone does not grant
 report access beyond the explicitly assigned defaults.
-Tenant admins cannot appoint other tenant admins or change platform-admin flags.
+Tenant admins may appoint registered own-tenant users as additional admins.
+They cannot change platform-admin flags, replace the primary admin or revoke admins.
 
 ### Grant user permissions
 

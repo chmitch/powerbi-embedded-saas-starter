@@ -21,6 +21,7 @@ import { CapacityPolicy } from "./capacity-policy.js";
 import { ReportRenders } from "./report-renders.js";
 import { ReportRequests } from "./report-requests.js";
 import { Insights } from "./insights.js";
+import { AnalyticsProvisioner, analyticsConfigured, TenantAnalytics } from "./analytics-security.js";
 
 const uuid = z.uuid();
 const name = z.string().trim().min(1).max(200);
@@ -78,7 +79,7 @@ export async function createApp(config: AppConfig) {
   const sessionKey = readyConfig ? await azure.secret(config.SessionSecretName) : randomBytes(32).toString("base64");
   const reportRenders = new ReportRenders(repo, sessionKey);
   const reportRequests = new ReportRequests(repo);
-  const insights = new Insights(db);
+  const insights = new Insights(db, new TenantAnalytics(repo, azure));
   app.use(session({
     name: "pbi.sid", secret: sessionKey, resave: false, saveUninitialized: false,
     store: readyConfig ? new EncryptedSqlSessionStore(db, () => azure.secret(config.SessionSecretName)) : undefined,
@@ -138,6 +139,25 @@ export async function createApp(config: AppConfig) {
   }));
   app.get("/api/tenants/:id/insights", wrap(async (req, res) => {
     res.json(await insights.tenant(getUser(req), idParam(req), req.query));
+  }));
+  app.post("/api/tenants/:id/admins", wrap(async (req, res) => {
+    const id = idParam(req);
+    manageTenant(req, id);
+    const { userId } = z.object({ userId: uuid }).strict().parse(req.body);
+    await repo.db.transaction(async tx => {
+      const actor = getUser(req);
+      const [current] = await tx.query<User>("SELECT * FROM app.Users WITH(UPDLOCK,HOLDLOCK) WHERE Id=@id", { id: actor.Id });
+      requireCondition(current?.IsTenantAdmin && sameId(current.TenantId, id), 403, "TenantAdminRequired",
+        "Your tenant administrator role changed. Refresh before retrying.");
+      requireCondition(!(await tx.query("SELECT Id FROM app.ProvisioningOperations WHERE TenantId=@id AND Status='Running'", { id })).length,
+        409, "SetupInProgress", "Wait for tenant setup to finish before appointing an administrator.");
+      const [target] = await tx.query<User>("SELECT * FROM app.Users WITH(UPDLOCK,HOLDLOCK) WHERE Id=@id AND TenantId=@tenantId",
+        { id: userId, tenantId: id });
+      requireCondition(target, 404, "NotFound", "User not found in your tenant.");
+      await tx.query("UPDATE app.Users SET IsTenantAdmin=1 WHERE Id=@id AND TenantId=@tenantId", { id: userId, tenantId: id });
+    });
+    await repo.audit(getUser(req), "AssignAdditionalTenantAdmin", userId, "Succeeded", id);
+    res.json({ assigned: true });
   }));
   app.get("/api/me/content", wrap(async (req, res) => {
     const user = getUser(req);
@@ -267,6 +287,19 @@ export async function createApp(config: AppConfig) {
     res.json(await fabric.repairWorkspaceAccess(idParam(req), await auth.operatorToken(req),
       input.confirmWorkspaceId, input.confirmPrincipalId, getUser(req)));
   }));
+  app.post("/api/admin/tenants/:id/analytics", wrap(async (req, res) => {
+    platform(req);
+    requireCondition(analyticsConfigured(config), 409, "AnalyticsNotConfigured", "Configure analytics before granting access.");
+    z.object({}).strict().parse(req.body);
+    await new AnalyticsProvisioner(repo, azure, fabric).ensure(idParam(req), await auth.operatorToken(req));
+    await repo.audit(getUser(req), "ConfigureTenantAnalytics", idParam(req), "Succeeded", idParam(req));
+    res.json({ configured: true, verificationRequired: true });
+  }));
+  app.post("/api/admin/tenants/:id/analytics/verify", wrap(async (req, res) => {
+    platform(req);
+    z.object({}).strict().parse(req.body);
+    res.json(await new AnalyticsProvisioner(repo, azure, fabric).verify(idParam(req)));
+  }));
   app.post("/api/admin/tenants/:id/setup", wrap(async (req, res) => {
     platform(req);
     res.status(202).json(await provisioner.start(setupSchema.parse(req.body), getUser(req),
@@ -312,13 +345,14 @@ export async function createApp(config: AppConfig) {
   app.get("/api/admin/workspaces", wrap(async (req, res) => {
     platform(req);
     const [workspaces, tenants] = await Promise.all([fabric.workspaces(await auth.operatorToken(req)), repo.tenants()]);
-    res.json(workspaces.filter(w => !sameId(w.id, config.ManagementWorkspaceId))
+    res.json(workspaces.filter(w => !sameId(w.id, config.ManagementWorkspaceId) && !sameId(w.id, config.AgentWorkspaceId))
       .map(w => ({ ...w, tenant: tenants.find(t => sameId(t.WorkspaceId, w.id))?.Name ?? null })));
   }));
   app.post("/api/admin/tenants/adopt", wrap(async (req, res) => {
     platform(req);
     const input = z.object({ workspaceId: uuid, name, pendingTenantId: uuid.optional() }).strict().parse(req.body);
     assertNotManagementResource(input.workspaceId, config.ManagementWorkspaceId);
+    assertNotManagementResource(input.workspaceId, config.AgentWorkspaceId);
     const token = await auth.operatorToken(req);
     const workspace = await fabric.operator<Workspace>(token, `/groups/${input.workspaceId}`);
     const users = await fabric.operator<{ value: { identifier?: string; groupUserAccessRight: string }[] }>(token, `/groups/${input.workspaceId}/users`);
@@ -362,7 +396,7 @@ export async function createApp(config: AppConfig) {
   }));
   app.post("/api/admin/tenants/:id/access", wrap(async (req, res) => {
     platform(req); const tenant = await repo.tenant(idParam(req));
-    assertNotManagementResource(tenant.WorkspaceId, config.ManagementWorkspaceId);
+    assertNotManagementResource(tenant.WorkspaceId, config.ManagementWorkspaceId, config.AgentWorkspaceId);
     requireCondition(tenant.WorkspaceId && tenant.EmbeddingObjectId, 409, "MissingConfiguration", "Create the workspace and embedding identity first.");
     await fabric.operator(await auth.operatorToken(req), `/groups/${tenant.WorkspaceId}/users`, "POST",
       { identifier: tenant.EmbeddingObjectId, groupUserAccessRight: "Admin", principalType: "App" });
@@ -378,7 +412,7 @@ export async function createApp(config: AppConfig) {
     platform(req); const tenant = await repo.tenant(idParam(req));
     const { capacityId } = z.object({ capacityId: uuid }).strict().parse(req.body);
     assertNotManagementResource(capacityId, config.ManagementCapacityId);
-    assertNotManagementResource(tenant.WorkspaceId, config.ManagementWorkspaceId);
+    assertNotManagementResource(tenant.WorkspaceId, config.ManagementWorkspaceId, config.AgentWorkspaceId);
     requireCondition(tenant.WorkspaceId, 409, "MissingWorkspace", "Create or adopt a workspace first.");
     const token = await auth.operatorToken(req);
     const capacities = await fabric.operator<{ value: { id: string }[] }>(token, "/capacities");

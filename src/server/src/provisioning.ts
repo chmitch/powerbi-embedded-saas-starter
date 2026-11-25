@@ -8,6 +8,7 @@ import type { FabricService, SampleImport, Workspace } from "./fabric.js";
 import type { Repository } from "./repository.js";
 import type { Executor } from "./db.js";
 import { assertSampleAvailable } from "./sample.js";
+import { AnalyticsProvisioner, analyticsConfigured } from "./analytics-security.js";
 
 export const setupSchema = z.object({
   requestId: z.uuid(), name: z.string().trim().min(1).max(200),
@@ -25,7 +26,7 @@ interface ArmCapacity {
   name: string; location: string; sku: { name: string };
   tags?: Record<string, string>; properties: { state?: string; provisioningState?: string };
 }
-type StepKey = "identity" | "capacity" | "workspace" | "access" | "assignment" | "administrator" | "verification" | "sample";
+type StepKey = "identity" | "capacity" | "workspace" | "access" | "assignment" | "administrator" | "verification" | "sample" | "analytics";
 interface Step { key: StepKey; label: string; status: "pending" | "running" | "done" | "failed"; message?: string }
 interface State {
   kind?: "setup";
@@ -79,7 +80,7 @@ export class TenantProvisioner {
   private async sampleTenant(actor: User) {
     requireCondition(actor.IsTenantAdmin, 403, "TenantAdminRequired", "An explicit tenant administrator role is required.");
     const tenant = await this.repo.tenant(tenantMembership(actor));
-    assertNotManagementResource(tenant.WorkspaceId, this.azure.config.ManagementWorkspaceId);
+    assertNotManagementResource(tenant.WorkspaceId, this.azure.config.ManagementWorkspaceId, this.azure.config.AgentWorkspaceId);
     return tenant;
   }
   private sampleView(operation: Operation, actor: User) {
@@ -156,7 +157,7 @@ export class TenantProvisioner {
   }
   async settings(tenantId: string, token: string) {
     const tenant = await this.repo.tenant(tenantId);
-    assertNotManagementResource(tenant.WorkspaceId, this.azure.config.ManagementWorkspaceId);
+    assertNotManagementResource(tenant.WorkspaceId, this.azure.config.ManagementWorkspaceId, this.azure.config.AgentWorkspaceId);
     const administrators = (await this.repo.users(tenantId)).filter(user => user.IsTenantAdmin);
     const primary = administrators.find(user => sameId(user.ObjectId, tenant.PrimaryAdminObjectId));
     const primaryId = primary?.ObjectId ?? (administrators.length === 1 ? administrators[0]!.ObjectId : undefined);
@@ -185,7 +186,7 @@ export class TenantProvisioner {
     }
     const id = tenantId ?? randomUUID();
     const tenant = tenantId ? await this.repo.tenant(id) : undefined;
-    assertNotManagementResource(tenant?.WorkspaceId, this.azure.config.ManagementWorkspaceId);
+    assertNotManagementResource(tenant?.WorkspaceId, this.azure.config.ManagementWorkspaceId, this.azure.config.AgentWorkspaceId);
     requireCondition(!input.includeSample || !tenant, 400, "NewTenantSampleOnly", "The bundled sample can only be included when creating a new tenant.");
     if (input.includeSample) await assertSampleAvailable();
     if (tenant) {
@@ -213,7 +214,8 @@ export class TenantProvisioner {
     requireCondition(!identity || !previousAdminId || sameId(identity.objectId, previousAdminId) || input.replaceAdministrator,
       400, "ConfirmAdministratorChange", "Confirm replacing the current primary tenant administrator.");
     const state: State = { input, identity, previousAdminId, operatorUpn, isNewTenant: !tenant,
-      steps: stepLabels.filter(([key]) => key !== "sample" || input.includeSample)
+      steps: [...stepLabels, ...(analyticsConfigured(this.azure.config) ? [["analytics", "Configure tenant analytics access"] as [StepKey, string]] : [])]
+        .filter(([key]) => key !== "sample" || input.includeSample)
         .map(([key, label]) => ({ key, label, status: "pending" })) };
     if (input.capacity.mode === "existing") {
       assertNotManagementResource(input.capacity.id, this.azure.config.ManagementCapacityId);
@@ -327,7 +329,7 @@ export class TenantProvisioner {
         step.status = "running"; step.message = "In progress; waiting for the service to confirm completion.";
         await this.save(operation, state);
         const tenant = await this.repo.tenant(operation.TenantId);
-        assertNotManagementResource(tenant.WorkspaceId, this.azure.config.ManagementWorkspaceId);
+        assertNotManagementResource(tenant.WorkspaceId, this.azure.config.ManagementWorkspaceId, this.azure.config.AgentWorkspaceId);
         if (step.key === "identity") {
           requireCondition(!state.identityRequested || tenant.EmbeddingAppObjectId, 409, "RecoveryRequired",
             "An earlier service-principal creation could not be confirmed. Inspect Entra before retrying; no duplicate will be created.");
@@ -394,6 +396,8 @@ export class TenantProvisioner {
         } else if (step.key === "sample") {
           requireCondition(state.isNewTenant && state.input.includeSample, 409, "NewTenantSampleOnly", "Sample seeding is restricted to opted-in new tenants.");
           await this.seedSample(operation, state);
+        } else if (step.key === "analytics") {
+          await new AnalyticsProvisioner(this.repo, this.azure, this.fabric).ensure(tenant.Id, token);
         }
         step.status = "done"; step.message = "Confirmed.";
         await this.save(operation, state);

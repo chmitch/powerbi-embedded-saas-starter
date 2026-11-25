@@ -20,6 +20,12 @@ const schema = z.object({
   ManagementWorkspaceId: z.union([z.literal(""), z.uuid()]).default(""),
   ManagementCapacityId: z.union([z.literal(""), z.uuid()]).default(""),
   ManagementCapacityResourceId: z.string().default(""),
+  AgentWorkspaceId: z.union([z.literal(""), z.uuid()]).default(""),
+  AnalyticsReaderGroupId: z.union([z.literal(""), z.uuid()]).default(""),
+  AnalyticsReaderGroupName: z.string().max(128).default(""),
+  AnalyticsEndpointId: z.union([z.literal(""), z.uuid()]).default(""),
+  AnalyticsSqlServer: z.string().default(""),
+  AnalyticsSqlDatabase: z.string().default(""),
   AutoResumeCapacities: z.preprocess(value => typeof value === "string" && /^(true|false)$/i.test(value)
     ? value.toLowerCase() === "true" : value, z.boolean()).default(false),
   RuntimeManagedIdentityClientId: z.string().default(""),

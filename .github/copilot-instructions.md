@@ -49,8 +49,10 @@
   server-resolved tenant target workspace. Reauthorize renewal/mode/save changes.
 - Required effective-identity RLS is currently unsupported and must fail closed.
   Never omit identity/roles or retry with an unfiltered token.
-- Management workspace/capacity are not customer resources: reject adoption,
-  assignment, customer mutation and embedding; never grant tenant principals access.
+- Management workspace/capacity and the agent workspace are not customer resources:
+  reject adoption, customer mutation and embedding. Never grant tenant principals
+  management-workspace membership. Optional analytics permits database item Read
+  only plus curated SQL endpoint grants/RLS, and Contributor in the separate agent workspace.
 - UI hiding is not authorization. Mutations require backend checks and CSRF.
   ACL bits and explicit admin flags are the implemented model, not custom roles.
 
@@ -61,7 +63,9 @@
   Newly discovered content stays unpublished until own-tenant review.
 - First-run bootstrap is deployment-authorized, persisted and one-time; never
   promote the first arbitrary sign-in or reopen enrollment on a failed SQL read.
-- Only platform admins appoint tenant admins. Only guided creation of a new
+- Platform admins appoint/replace/revoke tenant admins; existing own-tenant admins
+  may promote already registered own-tenant users, without automatic report grants.
+  Only guided creation of a new
   tenant grants its initial admin full root defaults; retries preserve later edits.
 - Provisioning uses SQL checkpoints/leases and original-operator explicit retry.
   Preserve partial resources; reconcile ambiguous creation/import outcomes before
@@ -83,6 +87,13 @@
 - Insights are native SQL-backed pages, not embedded admin reports or CU/billing
   analytics. Platform usage is aggregate-only; tenant details require own-tenant
   admin status. Serving insights must not call Fabric/ARM or start tenant compute.
+- Optional agent analytics uses the database's separate SQL analytics endpoint.
+  Its RLS maps the calling tenant principal SID, not the interactive human.
+  Never replace endpoint isolation with a prompt or client-supplied tenant context.
+  Tenant Insights uses that tenant's principal and RLS views without tenant query
+  predicates or shared-identity fallback. Platform aggregates remain transactional
+  SQL. Mirrored tenant data can lag. Agent/chat and an aggregate-only agent source
+  are separate work. Verify real principal access before publishing an agent.
 - Use charts except user request history; rolling UTC week default, 7/30/90/365
   presets, custom up to 366 inclusive days. Zero-fill counts, not missing averages.
 

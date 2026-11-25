@@ -128,5 +128,15 @@ export async function migrate(db: Database) {
           INCLUDE(DurationMs);
         INSERT app.SchemaVersions(Version) VALUES(5);
       END`);
+    await tx.query(`
+      IF NOT EXISTS(SELECT 1 FROM app.SchemaVersions WHERE Version=6)
+      BEGIN
+        CREATE TABLE app.AnalyticsPrincipalTenants (
+          TenantId uniqueidentifier NOT NULL PRIMARY KEY REFERENCES app.Tenants(Id),
+          ClientId uniqueidentifier NOT NULL UNIQUE,
+          ObjectId uniqueidentifier NOT NULL UNIQUE
+        );
+        INSERT app.SchemaVersions(Version) VALUES(6);
+      END`);
   });
 }

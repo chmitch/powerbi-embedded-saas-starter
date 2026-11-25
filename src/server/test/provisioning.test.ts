@@ -102,7 +102,7 @@ function fixture(options: { wait?: () => Promise<unknown>; pollLimit?: number } 
         EmbedUrl: p.embedUrl as string | null, RequiresIdentity: Boolean(p.identity), UnsafeDependency: Boolean(p.unsafe),
         Deleted: false, Published: false }); return [];
     }
-    if (q.startsWith("UPDATE app.Content")) {
+    if (q.startsWith("UPDATE app.Content") || q.startsWith("UPDATE c SET Deleted=1 FROM app.Content")) {
       for (const c of content.filter(c => equal(c.TenantId, p.id) && (!p.contentId || equal(c.Id, p.contentId)))) {
         if (q.includes("SET Deleted=1")) c.Deleted = true;
         else if (q.includes("SET Published=1")) {

@@ -7,6 +7,7 @@ import { assertEmbedding, assertNotManagementResource, effectivePermissions, Per
 import { AppError, requireCondition } from "./errors.js";
 import { capacityDemand, CapacityRecovery, waitForCapacityData } from "./capacity-recovery.js";
 import { sampleForm, sampleName } from "./sample.js";
+import { demoMarkerName, demoReportKeys } from "./demo-data.js";
 
 const pbi = "https://api.powerbi.com/v1.0/myorg";
 interface Collection<T> { value: T[] }
@@ -75,7 +76,7 @@ export class FabricService {
   }
   async importSample(id: string) {
     const tenant = await this.repo.tenant(id);
-    assertNotManagementResource(tenant.WorkspaceId, this.azure.config.ManagementWorkspaceId);
+    assertNotManagementResource(tenant.WorkspaceId, this.azure.config.ManagementWorkspaceId, this.azure.config.AgentWorkspaceId);
     requireCondition(tenant.WorkspaceId, 409, "MissingWorkspace", "Assign a tenant workspace before importing the sample.");
     const token = await this.runtimeToken(tenant);
     return remoteJson<SampleImport>(
@@ -84,7 +85,7 @@ export class FabricService {
   }
   async sampleImport(id: string, importId: string) {
     const tenant = await this.repo.tenant(id);
-    assertNotManagementResource(tenant.WorkspaceId, this.azure.config.ManagementWorkspaceId);
+    assertNotManagementResource(tenant.WorkspaceId, this.azure.config.ManagementWorkspaceId, this.azure.config.AgentWorkspaceId);
     requireCondition(tenant.WorkspaceId, 409, "MissingWorkspace", "The sample's tenant workspace is missing.");
     return this.operator<SampleImport>(await this.runtimeToken(tenant), `/groups/${tenant.WorkspaceId}/imports/${importId}`);
   }
@@ -98,7 +99,7 @@ export class FabricService {
     throw new AppError(409, "DiscoveryLimit", "Discovery exceeded the initial application's 50,000-workspace limit. Refine the deployment scope.");
   }
   async runtimeToken(tenant: Tenant) {
-    assertNotManagementResource(tenant.WorkspaceId, this.azure.config.ManagementWorkspaceId);
+    assertNotManagementResource(tenant.WorkspaceId, this.azure.config.ManagementWorkspaceId, this.azure.config.AgentWorkspaceId);
     requireCondition(tenant.EmbeddingClientId && tenant.SecretName, 409, "MissingIdentity", "Provision this tenant's embedding service principal first.");
     const client = new ConfidentialClientApplication({
       auth: { clientId: tenant.EmbeddingClientId, clientSecret: await this.azure.secret(tenant.SecretName),
@@ -164,7 +165,7 @@ export class FabricService {
     requireCondition(this.azure.config.ManagementWorkspaceId, 409, "MissingManagementConfiguration",
       "Workspace access repair requires a pinned management workspace reference.");
     const tenant = await this.repo.tenant(id);
-    assertNotManagementResource(tenant.WorkspaceId, this.azure.config.ManagementWorkspaceId);
+    assertNotManagementResource(tenant.WorkspaceId, this.azure.config.ManagementWorkspaceId, this.azure.config.AgentWorkspaceId);
     requireCondition(tenant.WorkspaceId && tenant.EmbeddingObjectId, 409, "MissingConfiguration",
       "Complete tenant workspace and identity setup before repairing access.");
     requireCondition(sameId(workspaceId, tenant.WorkspaceId) && sameId(principalId, tenant.EmbeddingObjectId),
@@ -245,7 +246,17 @@ export class FabricService {
       await tx.query("EXEC sp_getapplock @Resource=@resource,@LockMode='Exclusive',@LockOwner='Transaction',@LockTimeout=30000", { resource: `sync:${id}` });
       const [root] = await tx.query<{ Id: string }>("SELECT Id FROM app.Nodes WHERE TenantId=@id AND ParentId IS NULL", { id });
       requireCondition(root, 409, "MissingRoot", "The tenant navigation root is missing.");
-      await tx.query("UPDATE app.Content SET Deleted=1 WHERE TenantId=@id", { id });
+      await tx.query(`UPDATE c SET Deleted=1 FROM app.Content c WHERE c.TenantId=@id AND NOT (
+        c.Kind='Report' AND c.Published=0 AND c.EmbedUrl IS NULL AND c.ModelExternalId IS NULL
+        AND c.UnsafeDependency=1 AND c.Name LIKE '[[]DEMO]%'
+        AND EXISTS(SELECT 1 FROM app.Settings s WHERE s.Name=@demoMarker AND ISJSON(s.Value)=1
+          AND JSON_VALUE(CASE WHEN ISJSON(s.Value)=1 THEN s.Value ELSE '{}' END,'$.version')='1'
+          AND TRY_CONVERT(uniqueidentifier,JSON_VALUE(CASE WHEN ISJSON(s.Value)=1 THEN s.Value ELSE '{}' END,'$.workspaceId'))=TRY_CONVERT(uniqueidentifier,@workspaceId)
+          AND TRY_CONVERT(uniqueidentifier,JSON_VALUE(CASE WHEN ISJSON(s.Value)=1 THEN s.Value ELSE '{}' END,'$.rootId'))=TRY_CONVERT(uniqueidentifier,@rootId))
+        AND EXISTS(SELECT 1 FROM OPENJSON(@demoReports) WITH(Id uniqueidentifier,ExternalId uniqueidentifier) d
+          WHERE d.Id=c.Id AND d.ExternalId=c.ExternalId))`,
+      { id, demoMarker: demoMarkerName(id), demoReports: JSON.stringify(demoReportKeys(id)),
+        workspaceId: tenant.WorkspaceId, rootId: root.Id });
       for (const item of [...models.value.map(m => ({ externalId: m.id, kind: "Model", name: m.name, modelId: null,
         embedUrl: null, identity: Boolean(m.isEffectiveIdentityRequired || m.isEffectiveIdentityRolesRequired),
         unsafe: Boolean(m.upstreamDatasets?.length) })),

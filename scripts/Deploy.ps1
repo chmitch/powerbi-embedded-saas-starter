@@ -11,6 +11,7 @@ param(
     [switch]$GrantGraphPermissions,
     [switch]$GrantAdminConsent,
     [switch]$EnableCapacityAutoResume,
+    [switch]$EnableAnalytics,
     [string]$ServicePrincipalGroupId
 )
 . "$PSScriptRoot\Common.ps1"
@@ -86,7 +87,7 @@ if (-not $owner) {
 }
 $graph=Invoke-Graph "/servicePrincipals?`$filter=appId eq '00000003-0000-0000-c000-000000000000'"
 $requiredRoles=@('Application.ReadWrite.OwnedBy','User.Read.All')
-if ($appConfig.ServicePrincipalGroupId) { $requiredRoles += 'GroupMember.ReadWrite.All' }
+if ($appConfig.ServicePrincipalGroupId -or $EnableAnalytics -or $appConfig['AnalyticsReaderGroupId']) { $requiredRoles += 'GroupMember.ReadWrite.All' }
 $assigned=Invoke-Graph "/servicePrincipals/$($provisioner.principalId)/appRoleAssignments"
 foreach ($roleName in $requiredRoles) {
     $role=@($graph.value[0].appRoles | Where-Object { $_.value -eq $roleName -and $_.allowedMemberTypes -contains 'Application' }) | Select-Object -First 1
@@ -113,6 +114,11 @@ if (-not @($roles).Count) {
     } finally { Remove-Item -LiteralPath $roleFile -ErrorAction SilentlyContinue }
 }
 Ensure-RoleAssignment $provisioner.principalId $roleName $scope
+if ($EnableAnalytics -or $appConfig['AgentWorkspaceId']) {
+    & "$PSScriptRoot\Initialize-Analytics.ps1" -ConfigurationPath $ConfigurationPath -GrantGraphPermissions:$GrantGraphPermissions
+    $configuration=Get-Content -LiteralPath $ConfigurationPath -Raw | ConvertFrom-Json -AsHashtable
+    $appConfig=$configuration.App; $deployment=$configuration.Deployment
+}
 $null=Invoke-AzJson @('appservice','plan','create','--resource-group',$ResourceGroup,'--name',$planName,'--location',$Location,'--is-linux','--sku',$AppServiceSku,'--number-of-workers','1')
 $null=Invoke-AzJson @('webapp','create','--resource-group',$ResourceGroup,'--plan',$planName,'--name',$webName,'--runtime','NODE:22-lts','--https-only','true','--basic-auth','Disabled')
 $null=Invoke-AzJson @('webapp','identity','assign','--resource-group',$ResourceGroup,'--name',$webName,'--identities',$runtime.id,$provisioner.id)

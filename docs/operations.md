@@ -104,7 +104,8 @@ See [development validation](development.md#validation-by-change).
 Compare `src\server\src\migrations.ts` with `app.SchemaVersions` in the actual
 management SQL database. Initial render tracking needs migration 4; request
 tracking/insights need migration 5. Check current source rather than assuming that
-5 will always be latest. Ordinary server startup and application-only ZIP
+5 will always be latest. Analytics principal mapping requires migration 6.
+Ordinary server startup and application-only ZIP
 publication do **not** migrate SQL.
 
 If migration is required, obtain explicit approval for that database write and
@@ -259,6 +260,80 @@ to migrate. These command modes do not start the portal or run its initializer.
 Close this dedicated shell afterward so overrides do not affect later work.
 Recheck migration versions and runtime schema permissions with read-only queries.
 Do not automatically call `--grant-database-principal` during app-only updates.
+
+## Incremental tenant analytics setup
+
+This opt-in procedure reuses the existing management capacity and tenant
+embedding principals. It does not purchase compute, publish a data agent, add
+chat, or create a platform-summary source. Service-principal agent authentication
+is preview. Obtain separate approval for infrastructure/grants, database changes,
+and application publication; do not run full Deploy for this existing-environment
+change. Resuming paused management capacity requires explicit billing approval.
+
+After tests/build, use the authoritative external configuration:
+
+```powershell
+.\scripts\Initialize-Analytics.ps1 -ConfigurationPath $configurationPath -WhatIf
+# With explicit resource/directory-grant approval:
+.\scripts\Initialize-Analytics.ps1 -ConfigurationPath $configurationPath `
+    -ResourcesOnly -GrantGraphPermissions
+```
+
+The script creates/pins `<base>-agents` and `<base>-analytics-readers`, assigns the
+existing management capacity, confirms existing principal IDs, adds reader-group
+membership and agent-workspace Contributor, and grants the provisioning identity
+Graph `GroupMember.ReadWrite.All` only when approved. Existing mismatched pins,
+roles or unpinned name collisions stop setup, rather than implicit adoption or
+replacement. A resources-only result does **not** install SQL security.
+
+In Fabric, share the management SQL database to the new reader group with
+**Read only; every additional permission checkbox unchecked**. Do not give
+ReadData, ReadAll, Write or management-workspace membership. Review inherited
+workspace/group and preexisting item/SQL access as well as direct assignments.
+Sharing may take up to two hours to propagate.
+
+With database-write approval, rerun without `-ResourcesOnly`:
+
+```powershell
+.\scripts\Initialize-Analytics.ps1 -ConfigurationPath $configurationPath
+```
+
+This applies migration 6 and trusted principal mappings on transactional SQL,
+then independent RLS/view/grant setup on the pinned analytics endpoint.
+If tables have not replicated, inspect the database's **Replication > Monitor
+replication** and retry the same setup after propagation. Never substitute empty
+tables or an unfiltered view. Existing changed/disabled predicates fail closed
+and require explicit review rather than automatic policy replacement.
+
+Tenant Insights requires the updated `analytics` views (including request/render
+history fields and GUID casts) before code publication. In an environment whose
+resources and mappings are already initialized, run the built server's
+`--setup-analytics` mode with the external configuration and approved SQL setup
+identity; no new migration is needed for this view update. The existing enabled
+policy is validated, not replaced. Tenant queries then use the tenant principal
+and database RLS, without tenant predicates or shared-identity fallback.
+Replication lag can delay inventory/telemetry visibility. Platform aggregates
+remain on transactional SQL.
+
+Add only the six new `App__` settings from external `App` pins to the existing
+App Service: `AgentWorkspaceId`, `AnalyticsReaderGroupId`,
+`AnalyticsReaderGroupName`, `AnalyticsEndpointId`, `AnalyticsSqlServer`,
+`AnalyticsSqlDatabase`. Preserve all existing settings, identities, startup,
+NSP/Key Vault access and observed Always On. Publish tested application code
+with the application-only procedure, with explicit approval.
+
+Using an authenticated platform session and CSRF, existing/manual tenants can
+POST `{}` to `/api/admin/tenants/<id>/analytics` to reconcile grants, then POST
+`{}` to `/api/admin/tenants/<id>/analytics/verify`. Verification uses the existing
+secret **inside the backend**, never an operator-exported credential. Require
+success for every existing principal, including visible own data, no foreign data,
+denied sensitive reads and no SQL security-altering privileges. Do not broaden
+permissions or grant the local operator vault access if verification fails.
+
+Only after those checks should an operator author/publish the tenant data agent
+in the isolated workspace, selecting approved `analytics` views only. Treat
+effective-access questions, chat integration and platform aggregate-only agent
+setup as separate unfinished work, not capabilities supplied by this procedure.
 
 ## Recovery and operating constraints
 

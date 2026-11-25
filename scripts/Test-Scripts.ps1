@@ -24,6 +24,7 @@ $whatIfConfig=Join-Path ([IO.Path]::GetTempPath()) "pbi-whatif-$([Guid]::NewGuid
 & "$PSScriptRoot\Initialize-Local.ps1" -NamePrefix pbitest -ConfigurationPath $whatIfConfig -UseKeyVaultPerimeter -DeferSecrets -WhatIf
 & "$PSScriptRoot\Deploy.ps1" -NamePrefix pbitest -ConfigurationPath $whatIfConfig -EnableCapacityAutoResume -WhatIf
 & "$PSScriptRoot\Initialize-FabricDatabase.ps1" -NamePrefix pbitest -ConfigurationPath $whatIfConfig -WhatIf
+& "$PSScriptRoot\Initialize-Analytics.ps1" -ConfigurationPath $whatIfConfig -WhatIf
 if (Test-Path -LiteralPath $whatIfConfig) { throw 'WhatIf wrote deployment configuration.' }
 Write-Output 'PowerShell parsing, configuration path guard, and no-provision WhatIf checks passed.'
 

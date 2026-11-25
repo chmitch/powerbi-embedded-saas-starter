@@ -35,8 +35,9 @@ export function tenantMembership(user: User) {
   return user.TenantId;
 }
 
-export function assertNotManagementResource(id: string | null | undefined, managementId: string | null | undefined) {
-  requireCondition(!sameId(id, managementId), 409, "ProtectedManagementResource",
+export function assertNotManagementResource(id: string | null | undefined, managementId: string | null | undefined,
+  agentWorkspaceId?: string | null) {
+  requireCondition(!sameId(id, managementId) && !sameId(id, agentWorkspaceId), 409, "ProtectedManagementResource",
     "Management infrastructure cannot be adopted, assigned to customers, or changed through tenant administration.");
 }
 

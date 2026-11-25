@@ -5,6 +5,7 @@ import { migrate } from "./migrations.js";
 import { createApp } from "./app.js";
 import { z } from "zod";
 import { initializeDeploymentSecrets } from "./deployment-secrets.js";
+import { setupAnalyticsSecurity, syncAnalyticsMappings } from "./analytics-security.js";
 
 async function main() {
   const initializeIndex = process.argv.indexOf("--initialize-secrets");
@@ -14,16 +15,28 @@ async function main() {
     console.log("Deployment credentials verified in Azure. No secret values were returned.");
     return;
   }
-  if (process.argv.includes("--migrate") || process.argv.includes("--grant-database-principal") || process.argv.includes("--check-database")) {
+  if (process.argv.includes("--migrate") || process.argv.includes("--grant-database-principal") ||
+    process.argv.includes("--check-database") || process.argv.includes("--setup-analytics") ||
+    process.argv.includes("--analytics-inventory")) {
     if (!config.SqlServer || !config.SqlDatabase) throw new Error("Configure the SQL endpoint before database operations.");
     const db = new Database(new AzureServices(config));
     try {
+      if (process.argv.includes("--analytics-inventory")) {
+        console.log(JSON.stringify(await db.query(`SELECT Id,EmbeddingClientId,EmbeddingObjectId
+          FROM app.Tenants WHERE EmbeddingClientId IS NOT NULL AND EmbeddingObjectId IS NOT NULL ORDER BY Id`)));
+        return;
+      }
       if (process.argv.includes("--check-database")) {
         const [result] = await db.query<{ DatabaseName: string }>("SELECT DB_NAME() AS DatabaseName");
         if (result?.DatabaseName !== config.SqlDatabase) throw new Error("Connected to an unexpected database.");
         console.log("SQL database connectivity verified.");
       }
       if (process.argv.includes("--migrate")) { await migrate(db); console.log("Database migrations applied."); }
+      if (process.argv.includes("--setup-analytics")) {
+        const count = await syncAnalyticsMappings(db);
+        await setupAnalyticsSecurity(config, new AzureServices(config).runtime);
+        console.log(`Analytics endpoint policy and read-only views configured for ${count} tenant identities. Verify item Read sharing and real principal access before enabling queries.`);
+      }
       const grantIndex = process.argv.indexOf("--grant-database-principal");
       if (grantIndex >= 0) {
         const clientId = z.uuid().parse(process.argv[grantIndex + 1]);

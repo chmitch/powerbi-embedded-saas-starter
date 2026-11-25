@@ -74,6 +74,7 @@ They and the SVG previews are generated from
 | --- | --- |
 | Azure resource group | One Linux B1 plan/web app, two user-assigned managed identities, Key Vault/NSP, dedicated management F2, and any separately purchased customer Fabric capacities |
 | Management Fabric workspace | Transactional SQL Database holding application state; never a customer tenant |
+| Optional agent Fabric workspace | Data agent only, on management capacity; tenant principals may be Contributors here, never in the management workspace |
 | Tenant Fabric workspace | One exclusive workspace per application tenant; reports/models and a dedicated embedding principal |
 | Microsoft Entra directory | Sign-in application, tenant applications/service principals, optional embedding security group, and directory users |
 | Power BI service | Issues backend-requested embed tokens and renders analytics in the browser iframe |
@@ -130,7 +131,7 @@ procedures are described in the corresponding sections below.
 | Dedicated management compute | Keep application persistence/sign-in separate from customer report capacity |
 | One Linux B1 instance | Lightweight initial target; in-process work, in-place updates, no slots or HA guarantee |
 | Key Vault + enforced NSP | Production secrets stay in Azure, with managed identity/RBAC and explicit app egress rules; no unprotected-public fallback |
-| Dedicated tenant principals | Each tenant principal is granted only its assigned workspace; profiles/federated credentials are not implemented |
+| Dedicated tenant principals | Each embeds only its assigned tenant workspace; optional analytics reuses it for isolated agent-workspace and restricted endpoint access; profiles/federated credentials are not implemented |
 | Shared navigation with inherited grants | One canonical security parent per item; aliases do not change Power BI artifact names |
 | Native administrator insights | Read management SQL without depending on customer compute; platform usage stays aggregate-only, tenant detail stays own-tenant |
 
@@ -148,6 +149,7 @@ procedures are described in the corresponding sections below.
 | In-process reconciliation and failure-driven recovery | `src\server\src\background.ts`, `capacity-recovery.ts` |
 | Scoped ARM inventory, capacity changes and billing opt-in | `src\server\src\capacity-management.ts`, `capacity-policy.ts` |
 | Initial request/render tracking and SQL insight queries | `src\server\src\report-requests.ts`, `report-renders.ts`, `insights.ts` |
+| Optional analytics endpoint RLS, identity mapping and verification | `src\server\src\analytics-security.ts`, `scripts\Initialize-Analytics.ps1` |
 | Report viewer/authoring and lifecycle guards | `src\web\src\reports.tsx`, `embedding.ts` |
 | Platform routing, fleet/details and capacity controls | `src\web\src\platform.tsx`, `platform-route.ts`, `tenant-details.tsx`, `capacity-manager.tsx` |
 | Own-tenant administration and application shell | `src\web\src\main.tsx` |
@@ -184,7 +186,7 @@ account linking; matching email addresses must not merge identities.
 | Deployment operator | Signed-in workforce user provisioning ARM/Entra/Fabric and applying SQL migrations/grants |
 | Runtime managed identity | Key Vault Secrets User, management workspace Viewer plus SQL DML on the `app` schema |
 | Provisioning managed identity | Key Vault Secrets Officer, Graph app ownership/creation and user lookup, optional embedding-group membership, RG-scoped Fabric capacity operator |
-| Tenant embedding principal | Credential in the selected store; workspace Admin on only that tenant's workspace; Power BI token generation |
+| Tenant embedding principal | Credential in the selected store; Admin on its tenant workspace and Power BI token generation; optional Contributor in the agent workspace and database item Read with restricted analytics SQL grants |
 
 Graph application grants are `Application.ReadWrite.OwnedBy`, `User.Read.All`,
 and optionally `GroupMember.ReadWrite.All`. The provisioner owns the sign-in app
@@ -199,6 +201,64 @@ Distinct managed identities share the same App Service process: they separate
 grants, not process isolation. A compromised shared backend could access multiple
 tenant credentials. No tenant principal receives management-workspace access.
 
+## Optional data-agent analytics security
+
+The opt-in topology has three workspace boundaries: management SQL, an
+agent-only workspace on the same management capacity, and customer tenant
+workspaces on customer compute. The diagrams show the baseline layout; this
+optional agent workspace is an additional service object, not another SQL
+database or newly purchased capacity.
+
+Reuse of each tenant's embedding principal is an accepted initial tradeoff:
+credentials remain backend-only, but credential compromise now includes
+that tenant's analytics access. Embed tokens themselves cannot authenticate to
+SQL or the agent. Contributor in the isolated agent workspace follows Microsoft's
+[service-principal preview setup](https://learn.microsoft.com/en-us/fabric/data-science/data-agent-service-principal);
+it is not query-only permission and allows agent content changes. Never place
+management SQL in that workspace or grant these principals management-workspace
+membership, including through groups.
+
+For SQL Database sources the agent queries the **SQL analytics endpoint**,
+not the transactional TDS endpoint. Automatic mirroring copies application
+tables, not transactional permissions/views. Configure endpoint security
+independently. A dedicated security group receives database **item Read only**
+through the Fabric portal, then SQL SELECT on named `analytics` views only;
+no ReadData, ReadAll, Write, broad schema grant, or endpoint CREATE USER.
+Sensitive operational tables and the principal mapping are SELECT-denied.
+
+Migration 6 stores unique trusted tenant/client/object-ID bindings.
+One schema-bound `analytics.TenantIsolation` policy protects tenant, user,
+content, navigation, grant, request and render rows. Its predicate compares
+`SUSER_SID()` with the persisted principal IDs and otherwise returns no rows:
+there is no administrator bypass or client-controlled session context.
+Mirroring exposes GUID columns as text; explicitly convert principal IDs back
+to `uniqueidentifier` before comparing their binary SIDs.
+SQL sees the **calling service principal**, not the interactive human's ID.
+The backend must separately require current own-tenant administrator membership
+before using that tenant's credential for any future agent request.
+Human administrator promotions/replacement/revocation therefore require no
+additional Fabric grants or per-user RLS policies.
+
+Current curated views cover tenant/user/report inventory, request attempts and
+initial renders. They do not yet calculate effective hierarchical report access,
+provide platform-only aggregate analytics, publish an agent, or expose chat.
+Do not tell an agent that direct grants equal effective access.
+Native Tenant Insights uses the tenant's principal and these RLS-protected views,
+without tenant query predicates or shared-identity fallback. Backend own-tenant
+administrator authorization remains mandatory. Platform aggregates still query
+transactional SQL using the runtime identity.
+Platform users must not reuse a tenant-detail source for cross-tenant questions:
+an independently restricted aggregate-only source/identity remains separate work.
+
+Guided provisioning conditionally adds group membership and agent-workspace
+Contributor for the existing principal. Legacy/manual identity configuration
+requires the explicit analytics repair endpoint or incremental script.
+Replication/item/group grants may lag. Verification must run as each actual
+tenant principal, confirm its SID and one visible own-tenant row, reject all
+foreign/null-tenant rows, reject sensitive-table reads and deny security-altering
+privileges. Resource creation or an empty query alone is not verification.
+See the [incremental runbook](docs/operations.md#incremental-tenant-analytics-setup).
+
 ## Administrator operating model
 
 Platform administration owns the **tenant infrastructure and onboarding control
@@ -209,7 +269,8 @@ Azure RBAC, direct Fabric publishing permissions or report-access bypasses.
 | Scope | Platform admin | Tenant admin |
 | --- | --- | --- |
 | Tenant/capacity lifecycle and embedding identity setup | Owns | Not permitted |
-| Primary/additional tenant-admin appointment and revocation | Owns | Cannot promote users |
+| Primary appointment/replacement and any admin revocation | Owns | Not permitted |
+| Additional tenant-admin appointment | Owns | May promote registered own-tenant users; no automatic report grants |
 | Ordinary tenant membership and user/item permission grants | No authority from platform status alone | Own tenant only |
 | Content synchronization/publication and shared navigation | No authority from platform status alone | Own tenant only |
 | Report viewing/authoring | Requires tenant membership and effective item/model grants | Requires effective item/model grants |
@@ -333,7 +394,7 @@ The tables are:
 
 | Table | Stored state |
 | --- | --- |
-| `SchemaVersions` | Applied migration versions (source defines versions 1-5) |
+| `SchemaVersions` | Applied migration versions (source defines versions 1-6) |
 | `Tenants` | Workspace mapping, embedding-identity references, lifecycle/readiness, primary administrator |
 | `Users` | Stable directory identity, sole tenant, admin flags, root permission defaults |
 | `Content` | Reports/models, external IDs, report-model dependency, publication/deletion/security flags |
@@ -345,11 +406,13 @@ The tables are:
 | `ReportRequests` | Authenticated initial known-report request attempts, identity/report snapshots, first client/server timestamps, outcome and stable server-generated render nonce |
 | `Sessions` | Encrypted server-side session and token-cache data with expiry |
 | `ProvisioningOperations` | Idempotent setup/sample requests, progress, checkpoints, lease and outcome |
+| `AnalyticsPrincipalTenants` | Unique tenant/client/object-ID bindings for optional SQL analytics endpoint RLS |
 
 Migrations run under a SQL application lock. Version 2 preserves existing users
 while allowing platform-only admins; version 3 adds setup operations and primary
 admin metadata; version 4 adds report-render history; version 5 adds initial
-request attempts for usage history. Tenant-aware constraints, exclusive workspace/root/content
+request attempts for usage history; version 6 adds protected analytics principal bindings.
+Tenant-aware constraints, exclusive workspace/root/content
 indexes, and transactions protect associations. No invitation, external-identity,
 custom-role, outbox, or separate dependency-graph tables are implemented.
 
@@ -401,7 +464,15 @@ enabling this code in an existing deployment; code-only ZIP publication does not
 apply migrations.
 
 Administrator insights are **native app pages**, not embedded Power BI reports.
-The backend reads management SQL with the runtime identity. It makes no
+Platform aggregates read transactional management SQL with the runtime identity;
+tenant details read the SQL analytics endpoint using the tenant's embedding
+principal. Tenant queries rely on database RLS, not tenant-ID predicates. The
+backend checks the SQL identity and requires exactly one visible own-tenant row
+before reading details; missing configuration/mappings, unavailable analytics or
+unexpected tenant visibility fail closed without a shared-identity fallback.
+Mirrored tenant inventory and telemetry are eventually consistent and can lag
+recent changes. Apply the updated curated views with `--setup-analytics` before
+publishing this query path. The backend makes no
 workspace inventory, embed-token, customer-capacity or billing API calls.
 Management SQL, application authentication and credential-store availability
 remain prerequisites. Paused customer capacity does not block the pages.
@@ -632,7 +703,9 @@ capacity writes are never automatically replayed.
 
 Management workspace/capacity IDs are externally pinned. They are excluded from
 adoption, tenant assignment, in-app customer capacity mutation and embedding,
-even if tenant records are misconfigured. Tenant principals never access them.
+even if tenant records are misconfigured. Tenant principals never receive
+management-workspace membership; the optional database item Read/analytics
+exception is described below.
 Capacity deletion blocks known registered-workspace assignments but cannot prove
 the absence of unmanaged consumers. Shared-capacity changes affect every assigned
 tenant; full impact/decommissioning workflows and load-based sizing remain work.

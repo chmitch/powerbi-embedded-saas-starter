@@ -105,9 +105,10 @@ node --import tsx --test .\src\server\test\authorization.test.ts .\src\server\te
 | Change | Checks to select |
 | --- | --- |
 | Tenant/item authorization and token shape | `authorization`, `embedding-contract`, applicable `http` tests |
-| Membership/admin/UPN registration | `tenant-users`, `directory`, `setup-http`, applicable authorization tests |
+| Membership/admin/UPN registration | `tenant-users`, `tenant-admin-appointments`, `directory`, `setup-http`, applicable authorization tests |
+| Analytics principal mapping, endpoint RLS and grants | `analytics-security`, types/build, script checks; real tenant-principal endpoint verification before enabling queries |
 | Report lifecycle helpers | `embedding-contract`, types/build, real-browser checks for SDK behavior |
-| Request/render tracking or insight charts | `report-requests`, `report-renders`, `insights`, types/build |
+| Request/render tracking or insight charts | `report-requests`, `report-renders`, `insights`, `tenant-analytics`, `analytics-security`, types/build |
 | Provisioning/sample imports | `provisioning`, `sample`, `tenant-sample-http`, `setup-http` |
 | Capacity/policy/repair | `capacity-management`, `capacity-http`, `capacity-policy`, `capacity-recovery`, `tenant-remediation` |
 | Script/config/network/package behavior | `scripts\Test-Scripts.ps1`; application tests if contracts also change |
@@ -117,7 +118,146 @@ Test names above are files under `src\server\test` with `.test.ts` suffix.
 Run `npm run check` and build when source/bundle behavior changes. Tests use
 fixtures/mocks; the PowerShell suite exercises parsing, path guards, dry runs,
 packaging, consent/NSP failures and health gates **without provisioning Azure**.
-Neither proves live identity grants, customer embedding or production readiness.
+
+## Synthetic demonstration data
+
+The optional **sample-data package** is a post-deployment, operator-managed
+workflow for explicitly selected demonstration tenants. It is off by default:
+neither `Deploy.ps1` nor application startup installs it, and there is no
+deployment switch for this package yet. It is separate from the single bundled
+`samples\Store Sales.pbix` used by onboarding and the tenant-admin sample action.
+
+| Component | Purpose |
+| --- | --- |
+| `src\server\src\demo-data.ts` | Seed/preview/remove the metadata-only fictional users, reports, permissions and usage |
+| `scripts\Download-DemoSamples.ps1` | Download the six pinned Microsoft PBIX files and license into an external asset directory |
+| `src\server\src\demo-samples.ts` | Import the verified local files, convert the existing synthetic seed and optionally grant admin view access |
+
+For a fresh demonstration tenant, create/configure the tenant normally, seed the
+metadata and synthetic usage first, then optionally convert it to real reports.
+Both stages require their own approved database/workspace writes. Existing real
+users, reports, models and usage are preserved. The package does not create
+Entra users, buy capacity or alter tenant membership/administrator roles.
+
+### Metadata-only seed
+
+The operator-only `demo-data` utility adds 15 fictional application users,
+10 unpublished metadata-only reports, folder/report grants and 3,000 request
+attempts per explicitly selected tenant, spread over 90 UTC days. Most attempts
+have linked renders; others demonstrate failed/incomplete loads. Two reports
+have no usage and one user is inactive. Names are prefixed `[DEMO]`. Synthetic
+directory/object IDs do not create Entra accounts. Reports have no model/embed
+URL and cannot open. No workspace API, real-user grant or administrator-role
+change is involved. Counts and usage, including platform aggregates, include
+these synthetic records; they must not be interpreted as genuine activity.
+
+Build the server, use approved external configuration with the signed-in SQL
+operator (not production managed identities), and preview before obtaining
+database-write approval to apply:
+
+```powershell
+npm run build --workspace @pbi/server
+$env:PBIEMBEDDED_CONFIG = '<absolute-external-configuration-path>'
+$env:NODE_ENV = 'development'
+node .\src\server\dist\demo-data.js --preview '<tenant-id-1>' '<tenant-id-2>'
+node .\src\server\dist\demo-data.js --apply '<tenant-id-1>' '<tenant-id-2>'
+```
+
+IDs are deterministic and the original history anchor is recorded in
+`app.Settings`. Repeating `--apply` verifies the original records and adds no
+duplicates. A repeat also restores sync-deleted demo reports after validating
+all their other fields. With separate deletion approval, use the same command with `--remove`
+instead. Cleanup checks the manifest and original record contents and deletes
+only the exact generated keys, not a name prefix or tenant-wide range. Changed
+records, missing manifests with colliding IDs or dependent real records require
+review rather than automatic repair/deletion. Operations are transactional
+across the selected tenants and audited. Run `demo-data.test.ts` for generator
+and lifecycle checks.
+
+The analytics mirror can lag after seeding. Workspace synchronization preserves
+only the exact demo report/application and external IDs, bound to a valid manifest
+for that workspace/root, while they remain unpublished metadata-only examples.
+It does not exempt real reports merely because their names start with `[DEMO]`.
+Older deployments without this safeguard mark fake reports deleted; upgrade
+before restoring their flags. This tool is not an application startup seed or a
+production workload generator, and is not yet integrated into deployment.
+
+### Real reports for synthetic telemetry
+
+`demo-samples` is a separately approved operator package, not an automatic
+deployment step. It imports six new demo-scoped PBIX files into each selected
+tenant workspace, without overwriting its existing Store Sales or other real
+content.
+
+#### Sample provenance and licensing
+
+The reports were acquired from the
+[`new-power-bi-service-samples` folder in Microsoft's `powerbi-desktop-samples` repository](https://github.com/microsoft/powerbi-desktop-samples/tree/main/new-power-bi-service-samples).
+The package pins revision
+[`bcc573acd49faeea262c1398e80a34e72d0f4679`](https://github.com/microsoft/powerbi-desktop-samples/tree/bcc573acd49faeea262c1398e80a34e72d0f4679/new-power-bi-service-samples),
+not the moving `main` branch, and checks every PBIX against its SHA-256 value in
+`demo-samples.ts`. Retain the accompanying
+[MIT license and Microsoft copyright notice](https://github.com/microsoft/powerbi-desktop-samples/blob/bcc573acd49faeea262c1398e80a34e72d0f4679/LICENSE)
+when copying or distributing the sample files.
+
+`Download-DemoSamples.ps1` retrieves the files from that pinned GitHub revision.
+The importer subsequently reads verified **local copies**; it does not fetch
+GitHub during workspace import. Keep all six PBIX files and `LICENSE` together
+in an approved directory outside the checkout, such as
+`<external-environment-directory>\sample-assets`. These external assets are not
+committed to this repository or included in the normal App Service deployment
+ZIP. An offline operator run requires those files to have been downloaded or
+copied beforehand; offline refers only to acquisition, not Fabric/SQL access.
+
+#### Conversion and operation
+
+| Original demo reports | Imported demo sample |
+| --- | --- |
+| Executive Overview; Customer Retention | Competitive Marketing Analysis |
+| Revenue Trends | Store Sales |
+| Sales Pipeline; Quarterly Planning | Revenue Opportunities |
+| Financial Performance; Budget vs Actual | Corporate Spend |
+| Legacy Scorecard (unused) | Employee Hiring and History |
+| Operational Efficiency; Regional Performance | Regional Sales Sample |
+
+The ten placeholders consolidate into six reports and six models. Historical
+request/render IDs, timestamps, durations, statuses and synthetic actors remain
+unchanged; references/names point to the actual imported reports. The hiring
+sample retains an unused-report scenario. Synthetic users' report permissions
+are combined across merged source reports, with model-authoring grants for the
+synthetic editors. An explicit `--grant-admin-view` grants current real tenant
+administrators view access to the demo folder only. Sample business data is
+Microsoft's supplied data; the usage history is still fabricated.
+
+```powershell
+npm run build --workspace @pbi/server
+.\scripts\Download-DemoSamples.ps1 -Destination '<absolute-external-asset-directory>'
+node .\src\server\dist\demo-samples.js --apply '<absolute-asset-directory>' '<tenant-id-1>' '<tenant-id-2>' --grant-admin-view
+```
+
+Run with the approved external configuration and SQL/Fabric/Key Vault identities.
+Production tenant secrets must remain inside Azure; do not grant the local
+operator vault access or copy secrets locally to run this command. An explicit
+`--resume-capacity` permits resuming only the tenant's currently verified existing
+capacity and starts billing; it never creates/resizes/reassigns compute.
+Management capacity must also be active for configuration SQL. Resuming that
+separate capacity requires separate billing approval; `--resume-capacity` is not
+blanket permission to resume management compute.
+
+Each import is journaled before upload; retries observe saved import IDs, never
+silently replay unknown uploads or adopt colliding report names. A renewable
+lease prevents concurrent package runs. Unsupported required model identity,
+cross-workspace dependencies or incomplete metadata leave the imports unpublished.
+Consolidation/publication is a SQL transaction, but workspace imports cannot be
+rolled back by that transaction. Existing live grants on temporary report nodes
+or live telemetry referencing placeholders stop consolidation for explicit review.
+Live telemetry on newly imported report rows also stops consolidation. After
+conversion, synchronization uses the real workspace inventory normally.
+Once converted, the original metadata-only seeder refuses that tenant. Removal
+of a real sample package requires separate workspace/database ownership review
+and approval; the metadata-only `--remove` is not its cleanup command.
+
+Unit tests and dry runs do not prove live identity grants, customer embedding or production readiness.
 Real-browser validation must cover the actual SDK/UI contract when mocks cannot.
 Use explicit authorization and the operations guide for production checks.
 

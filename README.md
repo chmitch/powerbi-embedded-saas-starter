@@ -15,7 +15,8 @@ The application supports:
   and resume target only capacities currently assigned to registered tenants.
 - Tenant administration: register existing Entra users, synchronize and publish
   content, add the bundled sample report, and manage shared navigation with
-  inherited folder/report permissions.
+  inherited folder/report permissions. Existing tenant admins can appoint additional
+  admins from their registered own-tenant users without granting report access.
 - App Owns Data report viewing, editing, Save As, and creation from approved models.
   Each tenant has its own workspace and embedding service principal; ordinary
   users belong to exactly one application tenant.
@@ -27,6 +28,15 @@ The application supports:
   own users' request history and report performance without starting tenant capacity.
   Usage/performance use bar and line charts with rolling week/month/quarter/year
   presets and custom dates; only individual user request history remains a table.
+- Optional tenant-analytics security setup: a separate agent workspace on management
+  capacity, reused tenant principals, and curated SQL analytics endpoint views
+  protected by principal-to-tenant RLS. This prepares a data source; it does not
+  publish a data agent or implement chat.
+- Optional operator-managed [sample-data package](docs/development.md#synthetic-demonstration-data):
+  fictional users, permissions and usage history, with an optional conversion to
+  six real [Microsoft sample reports/models](https://github.com/microsoft/powerbi-desktop-samples/tree/main/new-power-bi-service-samples).
+  This is separate from the bundled Store Sales onboarding sample and is not
+  automatically installed by deployment or application startup.
 
 [Setup](#setup) | [Azure deployment](#deploy-to-azure) |
 [Tenant onboarding](#first-sign-in-and-tenant-onboarding) |
@@ -79,7 +89,8 @@ Key Vault, and NSP resources. Subscription policy and regional quota must allow 
 
 An authorized Entra administrator must grant the provisioning identity Graph
 application permissions `Application.ReadWrite.OwnedBy` and `User.Read.All`;
-`GroupMember.ReadWrite.All` is also required when an embedding group is configured.
+`GroupMember.ReadWrite.All` is also required when an embedding group or analytics
+reader group is configured.
 The deployment can request those grants with `-GrantGraphPermissions`.
 `-GrantAdminConsent` grants the sign-in app's delegated Power BI management scopes.
 These switches do not elevate an unauthorized operator.
@@ -155,6 +166,11 @@ For a routine code update to an existing app, use the
 instead. It preserves existing cloud settings/grants and checks required SQL
 migrations before publication.
 
+For optional analytics use `-EnableAnalytics` with new-environment deployment, or
+the [incremental analytics runbook](docs/operations.md#incremental-tenant-analytics-setup)
+for an existing environment. Database item Read sharing remains a one-time Fabric
+portal action; configuration alone is not proof of tenant isolation.
+
 Deployment uses a separate environment and Key Vault, not a local-file credential
 configuration. Do **not** run local initialization first for this environment.
 The default footprint is billable: **one Linux B1 plan/web app and a dedicated
@@ -162,6 +178,12 @@ management F2**, plus Key Vault/NSP and two managed identities.
 All ARM resources target one resource group in **West US 3** by default.
 Fabric workspaces/SQL items and Entra objects are outside ARM resource-group scope.
 No customer report capacity is purchased during application deployment.
+
+To populate an explicitly selected demonstration tenant, follow the
+[sample-data package runbook](docs/development.md#synthetic-demonstration-data)
+after deployment. It documents the sample source/license, verified external
+PBIX downloads, synthetic-history conversion and cleanup limits. The six-file
+package is not included in the normal App Service deployment ZIP.
 
 ```powershell
 az login --tenant "<directory-id>"
@@ -465,6 +487,10 @@ Tracking is best-effort and durations are client-reported, not billing-grade.
 Failed/abandoned attempts before request tracking was enabled cannot be recovered.
 Insights depend on management SQL availability, not tenant capacity. These are
 native app pages, not embedded reports or Fabric CU/billing consumption analytics.
+Tenant details additionally require the configured SQL analytics endpoint and
+updated curated views (`--setup-analytics`): queries use the tenant principal and
+database RLS with no shared-identity fallback. Mirrored data can lag. Platform
+aggregates continue using transactional SQL.
 
 General-purpose portal PBIX/model upload (apart from the fixed bundled
 sample), effective-identity RLS, paginated/composite models,

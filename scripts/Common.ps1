@@ -17,6 +17,7 @@ function Get-DeploymentNames {
         NamingVersion=2; NamePrefix=$NamePrefix; SolutionName=$SolutionName; BaseName=$base; ResourceGroup=$group
         VaultName="$base-kv"; SqlDatabaseName="$base-configdb"; PerimeterName="$base-nsp"
         ManagementWorkspaceName="$base-mgmt"; ManagementCapacityName="$($base.Replace('-',''))mgmt"
+        AgentWorkspaceName="$base-agents"; AnalyticsReaderGroupName="$base-analytics-readers"
         WebAppName="$base-web"; AppServicePlanName="$base-plan"
         RuntimeIdentityName="$base-runtime-mi"; ProvisioningIdentityName="$base-provision-mi"
         WebApplicationName="$base-auth"; EmbeddingGroupName="$base-embedding"

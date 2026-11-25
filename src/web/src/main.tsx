@@ -181,7 +181,10 @@ function TenantManagement({ tenantId, version, run, busy }: { tenantId: string; 
           <input name="objectId" aria-label="Entra user object ID" placeholder="Entra user object ID" required /></>}</div>
         <PermissionPicker value={mask} onChange={setMask} /><button className="primary" disabled={busy}><Icon name="plus" />Register user</button></form>
       <table><thead><tr><th>User</th><th>Tenant administrator</th><th>Root permissions</th></tr></thead><tbody>{data?.users.map(u => <tr key={u.Id}><td>{u.DisplayName}<small>{u.ObjectId}</small></td>
-        <td>{u.IsTenantAdmin ? "Yes" : "No"}<small>Assigned by platform admin</small></td>
+        <td>{u.IsTenantAdmin ? "Yes" : <button disabled={busy} onClick={() => {
+          if (window.confirm(`Appoint ${u.DisplayName} as an additional tenant administrator? They will gain user, content, access and usage administration. Report permissions remain unchanged.`))
+            void run(() => api(`${base}/admins`, "POST", { userId: u.Id }), "Additional tenant administrator appointed. Report permissions are unchanged.");
+        }}>Appoint administrator</button>}<small>Primary appointments and role removal remain platform-managed.</small></td>
         <td><PermissionPicker value={u.DefaultPermissions} onChange={value => void run(() => api(`${base}/users/${u.Id}`, "PATCH", { permissions: value }))} /></td></tr>)}</tbody></table>
     </section>
     <section><h2>Tenant navigation</h2>

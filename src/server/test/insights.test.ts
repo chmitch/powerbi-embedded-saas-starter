@@ -9,6 +9,7 @@ import { Repository } from "../src/repository.js";
 import { AuthService } from "../src/auth.js";
 import { FabricService } from "../src/fabric.js";
 import { AzureServices } from "../src/azure.js";
+import { TenantAnalytics } from "../src/analytics-security.js";
 import { config } from "../src/config.js";
 import { createApp } from "../src/app.js";
 import type { User } from "../src/domain.js";
@@ -19,6 +20,13 @@ const tenantId = randomUUID(), otherTenant = randomUUID(), reportId = randomUUID
 const user: User = { Id: userId, TenantId: tenantId, DirectoryId: randomUUID(), ObjectId: randomUUID(),
   DisplayName: "Tenant operator", IsPlatformAdmin: false, IsTenantAdmin: true, DefaultPermissions: 0 };
 const range = { from: "2026-11-01", to: "2026-11-23" };
+const tenantSource = (reader: Pick<Database, "read">): Pick<TenantAnalytics, "withTenant"> => ({
+  withTenant: async (id, work) => {
+    assert.equal(id, tenantId);
+    return work(reader);
+  },
+});
+const noSharedReads = { read: async <T>(): Promise<T[]> => { assert.fail("Tenant insights must not use shared managed-identity data reads"); } };
 
 it("defaults to a UTC week, accepts year/leap-year ranges and bounds custom dates, filters and pagination", () => {
   const w = insightWindow(range);
@@ -94,18 +102,19 @@ it("returns platform aggregates without querying user/report identities or calli
   assert.equal(queries.length, 3);
 });
 
-it("scopes tenant summaries, historical report details and paginated user usage to the authorized tenant", async () => {
+it("reads RLS views without tenant predicates while preserving summaries, historical details and pagination", async () => {
   const queries: string[] = [];
   const reader = { read: async <T>(text: string, params?: Params) => {
     queries.push(text);
-    assert.equal(params?.tenantId, tenantId);
-    if (text.includes("SELECT Name AS name FROM app.Tenants")) return [{ name: "Tenant" }] as T[];
+    assert.doesNotMatch(text, /\bapp\.|@tenantId|TenantId\s*(?:=|<>)/);
+    assert.ok(!params || !("tenantId" in params));
+    if (text.includes("FROM analytics.Tenants")) return [{ tenantId, name: "Tenant" }] as T[];
     if (text.includes("TOP(1) name")) return [{ name: "Historical record" }] as T[];
     if (text.includes("AS users,")) return [{ users: 2, reports: 3, renders: 4 }] as T[];
     if (text.includes("FETCH NEXT")) {
       assert.equal(params?.userId, userId); assert.equal(params?.offset, 50);
-      assert.match(text, /q\.TenantId=@tenantId AND q\.UserId=@userId/);
-      assert.match(text, /r\.TenantId=@tenantId AND r\.UserId=@userId/);
+      assert.match(text, /q\.UserId=@userId/);
+      assert.match(text, /r\.UserId=@userId/);
       assert.match(text, /NOT EXISTS/);
       return Array.from({ length: 51 }, (_, n) => ({ id: String(n), status: n ? "Failed" : "Rendered" })) as T[];
     }
@@ -115,11 +124,11 @@ it("scopes tenant summaries, historical report details and paginated user usage 
     }
     if (text.includes("@reportId")) {
       assert.equal(params?.reportId, reportId);
-      assert.match(text, /TenantId=@tenantId AND ContentId=@reportId/);
+      assert.match(text, /ReportId=@reportId/);
     }
     return [] as T[];
   } };
-  const service = new Insights(reader);
+  const service = new Insights(noSharedReads, tenantSource(reader));
   const summary = await service.tenant(user, tenantId, range) as unknown as TenantInsights;
   assert.equal(summary.totals.reports, 3);
   assert.equal(summary.directoryLimited, false);
@@ -129,7 +138,8 @@ it("scopes tenant summaries, historical report details and paginated user usage 
   assert.equal(details.history.length, 50); assert.equal(details.hasMore, true);
   assert.equal(details.usage[0]!.renders, 3);
   assert.ok(queries.length > 10);
-  await assert.rejects(new Insights({ read: async () => [] }).tenant(user, tenantId, { ...range, reportId }), { code: "NotFound" });
+  const missing = { read: async <T>(text: string) => text.includes("FROM analytics.Tenants") ? [{ tenantId, name: "Tenant" }] as T[] : [] };
+  await assert.rejects(new Insights(noSharedReads, tenantSource(missing)).tenant(user, tenantId, { ...range, reportId }), { code: "NotFound" });
 });
 
 it("protects HTTP insight endpoints and allows dual-role own-tenant details without contacting Fabric or ARM", async context => {
@@ -143,12 +153,18 @@ it("protects HTTP insight endpoints and allows dual-role own-tenant details with
   let reads = 0;
   context.mock.method(Database.prototype, "read", async (text, params) => {
     reads++;
+    assert.doesNotMatch(text, /DisplayName|UserDisplayName|ReportName|ReportRequests/);
     if (text.includes("AS tenants")) return [{ tenants: 1, users: 2, reports: 1 }];
-    if (text.includes("SELECT Name AS name FROM app.Tenants")) {
-      assert.equal(params?.tenantId, tenantId); return [{ name: "Own tenant" }];
-    }
-    if (text.includes("TOP(1) name")) { assert.equal(params?.userId, userId); return [{ name: "Own user" }]; }
     return [];
+  });
+  context.mock.method(TenantAnalytics.prototype, "withTenant", async (id, work) => {
+    assert.equal(id, tenantId);
+    return work({ read: async <T>(text: string, params?: Params) => {
+      assert.doesNotMatch(text, /\bapp\.|@tenantId/);
+      if (text.includes("FROM analytics.Tenants")) return [{ tenantId, name: "Own tenant" }] as T[];
+      if (text.includes("TOP(1) name")) { assert.equal(params?.userId, userId); return [{ name: "Own user" }] as T[]; }
+      return [];
+    } });
   });
   const { app, db } = await createApp({ ...config, DirectoryTenantId: "", WebClientId: "", SqlServer: "",
     SqlDatabase: "", BootstrapObjectId: "", KeyVaultUri: "", LocalSecretsPath: "" });
@@ -174,4 +190,18 @@ it("protects HTTP insight endpoints and allows dual-role own-tenant details with
     actor.IsTenantAdmin = false;
     assert.equal((await get(`/api/tenants/${tenantId}/insights`)).status, 403);
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); await db.close(); }
+});
+
+it("fails closed for missing analytics, empty RLS results and foreign tenant visibility without shared SQL fallback", async () => {
+  await assert.rejects(new Insights(noSharedReads).tenant(user, tenantId, range), { code: "AnalyticsNotConfigured" });
+  for (const rows of [[], [{ tenantId: otherTenant, name: "Foreign" }],
+    [{ tenantId, name: "Own" }, { tenantId: otherTenant, name: "Foreign" }]]) {
+    let reads = 0;
+    const source = tenantSource({ read: async <T>() => { reads++; return rows as T[]; } });
+    await assert.rejects(new Insights(noSharedReads, source).tenant(user, tenantId, range),
+      { code: rows.length ? "AnalyticsIsolationFailed" : "AnalyticsReplicationPending" });
+    assert.equal(reads, 1);
+  }
+  const source = { withTenant: async () => { throw new Error("Tenant credential unavailable"); } };
+  await assert.rejects(new Insights(noSharedReads, source).tenant(user, tenantId, range), /Tenant credential unavailable/);
 });
